@@ -1,0 +1,29 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<RevitAddIns>
+  <AddIn Type="Command">
+    <Text>SeperatorAddin - cmdWallSeperator</Text>
+    <Description>Some description</Description>
+    <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
+    <FullClassName>SeperatorAddin.cmdWallSeperator</FullClassName>
+    <ClientId>349cc17e-9578-4481-8546-5065d673c966</ClientId>
+    <VendorId>com.YOUR COMPANY NAME</VendorId>
+    <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+    <Text>SeperatorAddin - cmdSplitFloors</Text>
+    <Description>Some description</Description>
+    <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
+    <FullClassName>SeperatorAddin.cmdSplitFloors</FullClassName>
+    <ClientId>fe369f32-8d1f-4662-839b-67afb922f830</ClientId>
+    <VendorId>com.YOUR COMPANY NAME</VendorId>
+    <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
+  </AddIn>
+  <AddIn Type="Application">
+    <Name>SeperatorAddin</Name>
+    <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
+    <FullClassName>SeperatorAddin.App</FullClassName>
+    <ClientId>1fd9b657-e185-463e-bbfe-5a06372c11da</ClientId>
+    <VendorId>com.YOUR COMPANY NAME</VendorId>
+    <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
+  </AddIn>
+</RevitAddIns>
