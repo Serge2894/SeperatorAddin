@@ -55,6 +55,47 @@ namespace SeperatorAddin.Common
                 return false;
             }
         }
+        public static List<Parameter> GetAllParametersFromElement(Element element)
+        {
+            List<Parameter> parameters = new List<Parameter>();
+
+            // Get instance parameters
+            foreach (Parameter param in element.Parameters)
+            {
+                if (param != null)
+                {
+                    parameters.Add(param);
+                }
+            }
+
+            return parameters;
+        }
+
+        /// <summary>
+        /// Get all parameters from an element (alternate spelling for compatibility)
+        /// </summary>
+        public static List<Parameter> GetAllParmatersFromElement(Element element)
+        {
+            return GetAllParametersFromElement(element);
+        }
+
+        /// <summary>
+        /// Get category by name from document
+        /// </summary>
+        public static Category GetCategoryByName(Document doc, string categoryName)
+        {
+            Categories categories = doc.Settings.Categories;
+
+            foreach (Category category in categories)
+            {
+                if (category.Name == categoryName)
+                {
+                    return category;
+                }
+            }
+
+            return null;
+        }
 
         internal static RibbonPanel CreateRibbonPanel(UIControlledApplication app, string tabName, string panelName)
         {

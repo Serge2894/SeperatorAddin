@@ -5,18 +5,18 @@
     <Description>Some description</Description>
     <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
     <FullClassName>SeperatorAddin.cmdWallSeperator</FullClassName>
-    <ClientId>349cc17e-9578-4481-8546-5065d673c966</ClientId>
+    <ClientId>35F399F2-81FA-401F-BD75-11F3C60D0D41</ClientId>
     <VendorId>com.YOUR COMPANY NAME</VendorId>
     <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
   </AddIn>
   <AddIn Type="Command">
-    <Text>SeperatorAddin - cmdSplitFloors</Text>
-    <Description>Some description</Description>
-    <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
-    <FullClassName>SeperatorAddin.cmdSplitFloors</FullClassName>
-    <ClientId>fe369f32-8d1f-4662-839b-67afb922f830</ClientId>
-    <VendorId>com.YOUR COMPANY NAME</VendorId>
-    <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
+	  <Text>SeperatorAddin - cmdSplitTool</Text>
+	  <Description>Some description</Description>
+	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
+	  <FullClassName>SeperatorAddin.cmdSplitTool</FullClassName>
+	  <ClientId>C602CDA0-2C48-4494-ABAD-40CCA4057794</ClientId>
+	  <VendorId>com.YOUR COMPANY NAME</VendorId>
+	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
   </AddIn>
   <AddIn Type="Application">
     <Name>SeperatorAddin</Name>
