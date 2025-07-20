@@ -1,170 +1,137 @@
 using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Plumbing;
+using Autodesk.Revit.UI;
 using Autodesk.Revit.UI.Selection;
-using SeperatorAddin.Common;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 
 namespace SeperatorAddin
 {
     [Transaction(TransactionMode.Manual)]
-    [Regeneration(RegenerationOption.Manual)]
     public class cmdPipeSplitter : IExternalCommand
     {
         public Result Execute(ExternalCommandData commandData, ref string message, ElementSet elements)
         {
-            UIApplication uiApp = commandData.Application;
-            UIDocument uiDoc = uiApp.ActiveUIDocument;
-            Document doc = uiDoc.Document;
+            UIApplication uiapp = commandData.Application;
+            UIDocument uidoc = uiapp.ActiveUIDocument;
+            Document doc = uidoc.Document;
 
             try
             {
                 // Select a pipe
-                Reference pipeRef = uiDoc.Selection.PickObject(
+                Reference pipeRef = uidoc.Selection.PickObject(
                     ObjectType.Element,
                     new PipeSelectionFilter(),
                     "Select a pipe to split");
 
-                Pipe selectedPipe = doc.GetElement(pipeRef) as Pipe;
-
-                // Select ONE model line
-                Reference lineRef = uiDoc.Selection.PickObject(
-                    ObjectType.Element,
-                    new ModelCurveSelectionFilter(),
-                    "Select ONE straight model line that crosses the pipe");
-
-                ModelCurve modelLine = doc.GetElement(lineRef) as ModelCurve;
-                Line splitLine = modelLine.GeometryCurve as Line;
-
-                if (splitLine == null)
+                Pipe originalPipe = doc.GetElement(pipeRef) as Pipe;
+                if (originalPipe == null)
                 {
-                    TaskDialog.Show("Error", "Please select a straight line.");
+                    TaskDialog.Show("Error", "Selected element is not a pipe.");
                     return Result.Failed;
                 }
 
-                using (Transaction trans = new Transaction(doc, "Split Pipe"))
+                // Get split point
+                XYZ splitPoint = uidoc.Selection.PickPoint("Pick a point on the pipe to split");
+
+                // Project the point onto the pipe
+                LocationCurve locCurve = originalPipe.Location as LocationCurve;
+                if (locCurve == null)
+                {
+                    TaskDialog.Show("Error", "Could not get pipe location curve.");
+                    return Result.Failed;
+                }
+
+                Line pipeLine = locCurve.Curve as Line;
+                if (pipeLine == null)
+                {
+                    TaskDialog.Show("Error", "This tool only works with straight pipes.");
+                    return Result.Failed;
+                }
+
+                // Project split point onto pipe line
+                IntersectionResult projection = pipeLine.Project(splitPoint);
+                if (projection == null)
+                {
+                    TaskDialog.Show("Error", "Could not project point onto pipe.");
+                    return Result.Failed;
+                }
+
+                XYZ projectedPoint = projection.XYZPoint;
+
+                // Check if split point is valid (not too close to ends)
+                double minDistance = 0.5; // 6 inches minimum
+                if (projectedPoint.DistanceTo(pipeLine.GetEndPoint(0)) < minDistance ||
+                    projectedPoint.DistanceTo(pipeLine.GetEndPoint(1)) < minDistance)
+                {
+                    TaskDialog.Show("Error", "Split point is too close to pipe ends.");
+                    return Result.Failed;
+                }
+
+                using (Transaction trans = new Transaction(doc, "Split Pipe with Insulation"))
                 {
                     trans.Start();
 
                     try
                     {
-                        // Store pipe properties before splitting
-                        PipeProperties pipeProps = GetPipeProperties(selectedPipe);
+                        // Store original pipe insulation data before splitting
+                        InsulationData originalInsulationData = GetPipeInsulation(doc, originalPipe);
 
-                        if (pipeProps.SystemTypeId == null || pipeProps.SystemTypeId == ElementId.InvalidElementId)
+                        // Store original pipe parameters
+                        Dictionary<string, object> pipeParameters = StorePipeParameters(originalPipe);
+
+                        // Get original pipe system
+                        ElementId systemTypeId = originalPipe.get_Parameter(
+                            BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM).AsElementId();
+
+                        // Split the pipe using Revit's built-in method
+                        ElementId newPipeId = PlumbingUtils.BreakCurve(
+                            doc, originalPipe.Id, projectedPoint);
+
+                        if (newPipeId == null || newPipeId == ElementId.InvalidElementId)
                         {
-                            TaskDialog.Show("Error", "The selected pipe is not assigned to a valid piping system.");
                             trans.RollBack();
+                            TaskDialog.Show("Error", "Failed to split pipe.");
                             return Result.Failed;
                         }
 
-                        LocationCurve locCurve = selectedPipe.Location as LocationCurve;
-                        if (locCurve == null)
+                        // Get the new pipe created by the split
+                        Pipe newPipe = doc.GetElement(newPipeId) as Pipe;
+
+                        // Restore parameters to both pipes
+                        RestorePipeParameters(originalPipe, pipeParameters);
+                        RestorePipeParameters(newPipe, pipeParameters);
+
+                        // Handle insulation for split pipes
+                        if (originalInsulationData != null && originalInsulationData.HasInsulation)
                         {
-                            trans.RollBack();
-                            TaskDialog.Show("Error", "Could not get pipe location.");
-                            return Result.Failed;
-                        }
+                            // Add insulation to the new pipe
+                            PipeInsulation newPipeInsulation = AddInsulationToPipe(
+                                doc, newPipe, originalInsulationData);
 
-                        Line pipeLine = locCurve.Curve as Line;
-                        if (pipeLine == null)
-                        {
-                            trans.RollBack();
-                            TaskDialog.Show("Error", "This tool only works with straight pipes.");
-                            return Result.Failed;
-                        }
-
-                        // Find intersection point
-                        XYZ intersectionPoint = FindIntersectionPoint(pipeLine, splitLine);
-                        if (intersectionPoint == null)
-                        {
-                            trans.RollBack();
-                            TaskDialog.Show("Error", "The split line does not intersect with the pipe in plan view.");
-                            return Result.Failed;
-                        }
-
-                        // Check if intersection point is valid
-                        double minDistance = 0.1;
-                        if (intersectionPoint.DistanceTo(pipeLine.GetEndPoint(0)) < minDistance ||
-                            intersectionPoint.DistanceTo(pipeLine.GetEndPoint(1)) < minDistance)
-                        {
-                            trans.RollBack();
-                            TaskDialog.Show("Error", "Split point is too close to pipe ends.");
-                            return Result.Failed;
-                        }
-
-                        // Get connected elements
-                        Dictionary<int, ConnectedElement> connectedElements = GetConnectedElements(selectedPipe.ConnectorManager.Connectors);
-
-                        // Check for insulation
-                        ElementId originalInsulationId = PipeInsulation.GetInsulationIds(doc, selectedPipe.Id).FirstOrDefault();
-                        PipeInsulation originalInsulation = null;
-                        if (originalInsulationId != null && originalInsulationId != ElementId.InvalidElementId)
-                        {
-                            originalInsulation = doc.GetElement(originalInsulationId) as PipeInsulation;
-                        }
-                        ElementId insulationTypeId = originalInsulation?.GetTypeId();
-                        double insulationThickness = originalInsulation?.Thickness ?? 0;
-
-                        // Get original connected elements before deleting pipe
-                        Connector startConnector = connectedElements.ContainsKey(0) ? connectedElements[0].OtherConnector : null;
-                        Connector endConnector = connectedElements.ContainsKey(1) ? connectedElements[1].OtherConnector : null;
-
-                        // Create new pipes (we create them before deleting the original to copy parameters)
-                        Pipe pipe1 = Pipe.Create(doc, pipeProps.SystemTypeId, pipeProps.PipeTypeId, pipeProps.LevelId, pipeLine.GetEndPoint(0), intersectionPoint);
-                        Pipe pipe2 = Pipe.Create(doc, pipeProps.SystemTypeId, pipeProps.PipeTypeId, pipeProps.LevelId, intersectionPoint, pipeLine.GetEndPoint(1));
-
-                        if (pipe1 == null || pipe2 == null)
-                        {
-                            trans.RollBack();
-                            TaskDialog.Show("Error", "Failed to create new pipe segments.");
-                            return Result.Failed;
-                        }
-
-                        pipe1.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM)?.Set(pipeProps.Diameter);
-                        pipe2.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM)?.Set(pipeProps.Diameter);
-
-                        // Copy parameters from original pipe
-                        CopyPipeParameters(selectedPipe, pipe1);
-                        CopyPipeParameters(selectedPipe, pipe2);
-
-                        // Now delete the original pipe
-                        doc.Delete(selectedPipe.Id);
-
-                        // Connect the two new segments to each other first
-                        ConnectPipes(doc, pipe1, pipe2, intersectionPoint);
-
-                        // Regenerate to commit the new geometry and connection
-                        doc.Regenerate();
-
-                        // Connect the outer ends to the original connectors
-                        if (startConnector != null)
-                        {
-                            GetConnectorAtEnd(pipe1, true)?.ConnectTo(startConnector);
-                        }
-                        if (endConnector != null)
-                        {
-                            GetConnectorAtEnd(pipe2, false)?.ConnectTo(endConnector);
-                        }
-
-                        // Add insulation if original had it
-                        if (insulationTypeId != null && insulationTypeId != ElementId.InvalidElementId && insulationThickness > 0)
-                        {
-                            PipeInsulation.Create(doc, pipe1.Id, insulationTypeId, insulationThickness);
-                            PipeInsulation.Create(doc, pipe2.Id, insulationTypeId, insulationThickness);
+                            // Add insulation to the original pipe (it may have been removed during split)
+                            PipeInsulation originalPipeNewInsulation = AddInsulationToPipe(
+                                doc, originalPipe, originalInsulationData);
                         }
 
                         trans.Commit();
-                        TaskDialog.Show("Success", "Pipe split into 2 segments successfully.");
+
+                        // Report results
+                        string resultMessage = "Pipe split successfully.";
+                        if (originalInsulationData != null && originalInsulationData.HasInsulation)
+                        {
+                            resultMessage += "\nInsulation parameters copied to both pipe segments.";
+                        }
+
+                        TaskDialog.Show("Success", resultMessage);
                         return Result.Succeeded;
                     }
                     catch (Exception ex)
                     {
                         trans.RollBack();
-                        TaskDialog.Show("Error", $"Failed: {ex.Message}\n\n{ex.StackTrace}");
+                        TaskDialog.Show("Error", $"Failed to split pipe: {ex.Message}");
                         return Result.Failed;
                     }
                 }
@@ -180,194 +147,263 @@ namespace SeperatorAddin
             }
         }
 
-        #region Helper Classes
-        private class PipeProperties
-        {
-            public ElementId SystemTypeId { get; set; }
-            public ElementId PipeTypeId { get; set; }
-            public ElementId LevelId { get; set; }
-            public double Diameter { get; set; }
-        }
+        #region Insulation Data Storage and Retrieval
 
-        private class ConnectedElement
+        private class InsulationData
         {
-            public Element Element { get; set; }
-            public Connector OtherConnector { get; set; }
-        }
-        #endregion
+            public bool HasInsulation { get; set; }
+            public ElementId InsulationTypeId { get; set; }
+            public double Thickness { get; set; }
+            public Dictionary<string, object> Parameters { get; set; }
 
-        #region Property Extraction
-        private PipeProperties GetPipeProperties(Pipe pipe)
-        {
-            return new PipeProperties
+            public InsulationData()
             {
-                PipeTypeId = pipe.GetTypeId(),
-                LevelId = pipe.ReferenceLevel.Id,
-                SystemTypeId = pipe.get_Parameter(BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM)?.AsElementId(),
-                Diameter = pipe.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM).AsDouble()
-            };
+                Parameters = new Dictionary<string, object>();
+            }
         }
-        #endregion
 
-        #region Geometry
-        private XYZ FindIntersectionPoint(Line pipeLine, Line splitLine)
+        private InsulationData GetPipeInsulation(Document doc, Pipe pipe)
         {
-            Line pipeLine2D = Line.CreateBound(new XYZ(pipeLine.GetEndPoint(0).X, pipeLine.GetEndPoint(0).Y, 0), new XYZ(pipeLine.GetEndPoint(1).X, pipeLine.GetEndPoint(1).Y, 0));
-            Line splitLine2D = Line.CreateBound(new XYZ(splitLine.GetEndPoint(0).X, splitLine.GetEndPoint(0).Y, 0), new XYZ(splitLine.GetEndPoint(1).X, splitLine.GetEndPoint(1).Y, 0));
+            InsulationData data = new InsulationData();
 
-            pipeLine2D.MakeUnbound();
-            splitLine2D.MakeUnbound();
+            // Find insulation associated with the pipe
+            FilteredElementCollector collector = new FilteredElementCollector(doc);
+            var insulations = collector
+                .OfClass(typeof(PipeInsulation))
+                .Cast<PipeInsulation>()
+                .Where(ins => ins.HostElementId == pipe.Id)
+                .ToList();
 
-            IntersectionResultArray results;
-            if (pipeLine2D.Intersect(splitLine2D, out results) == SetComparisonResult.Overlap && results.Size > 0)
+            if (insulations.Count == 0)
             {
-                XYZ intersection2D = results.get_Item(0).XYZPoint;
-                double param = pipeLine.Project(new XYZ(intersection2D.X, intersection2D.Y, pipeLine.GetEndPoint(0).Z)).Parameter;
-
-                return pipeLine.Evaluate(param, false);
+                data.HasInsulation = false;
+                return data;
             }
 
-            return null;
-        }
-        #endregion
+            PipeInsulation insulation = insulations.First();
+            data.HasInsulation = true;
+            data.InsulationTypeId = insulation.GetTypeId();
+            data.Thickness = insulation.Thickness;
 
-        #region Connection Handling
-        private Dictionary<int, ConnectedElement> GetConnectedElements(ConnectorSet connectors)
-        {
-            var connected = new Dictionary<int, ConnectedElement>();
-            int index = 0;
-            foreach (Connector conn in connectors)
+            // Store all parameters
+            foreach (Parameter param in insulation.Parameters)
             {
-                if (conn.IsConnected)
+                if (param == null || param.IsReadOnly) continue;
+
+                string paramName = param.Definition.Name;
+
+                try
                 {
-                    foreach (Connector other in conn.AllRefs)
+                    switch (param.StorageType)
                     {
-                        if (other.Owner.Id != conn.Owner.Id)
-                        {
-                            connected[index] = new ConnectedElement { Element = other.Owner, OtherConnector = other };
+                        case StorageType.Double:
+                            data.Parameters[paramName] = param.AsDouble();
                             break;
-                        }
+                        case StorageType.Integer:
+                            data.Parameters[paramName] = param.AsInteger();
+                            break;
+                        case StorageType.String:
+                            data.Parameters[paramName] = param.AsString();
+                            break;
+                        case StorageType.ElementId:
+                            data.Parameters[paramName] = param.AsElementId();
+                            break;
                     }
                 }
-                index++;
+                catch { }
             }
-            return connected;
+
+            return data;
         }
 
-        private void ConnectPipes(Document doc, Pipe pipe1, Pipe pipe2, XYZ connectionPoint)
-        {
-            Connector conn1 = GetConnectorNearPoint(pipe1, connectionPoint);
-            Connector conn2 = GetConnectorNearPoint(pipe2, connectionPoint);
+        #endregion
 
-            if (conn1 != null && conn2 != null)
+        #region Pipe Parameter Handling
+
+        private Dictionary<string, object> StorePipeParameters(Pipe pipe)
+        {
+            Dictionary<string, object> parameters = new Dictionary<string, object>();
+
+            // Store important pipe parameters
+            Parameter systemType = pipe.get_Parameter(BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM);
+            if (systemType != null)
+                parameters["SystemType"] = systemType.AsElementId();
+
+            Parameter diameter = pipe.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM);
+            if (diameter != null)
+                parameters["Diameter"] = diameter.AsDouble();
+
+            // Store custom parameters
+            foreach (Parameter param in pipe.Parameters)
+            {
+                if (param == null || param.IsReadOnly || !param.HasValue) continue;
+
+                string paramName = param.Definition.Name;
+                if (parameters.ContainsKey(paramName)) continue;
+
+                try
+                {
+                    switch (param.StorageType)
+                    {
+                        case StorageType.Double:
+                            parameters[paramName] = param.AsDouble();
+                            break;
+                        case StorageType.Integer:
+                            parameters[paramName] = param.AsInteger();
+                            break;
+                        case StorageType.String:
+                            parameters[paramName] = param.AsString();
+                            break;
+                        case StorageType.ElementId:
+                            parameters[paramName] = param.AsElementId();
+                            break;
+                    }
+                }
+                catch { }
+            }
+
+            return parameters;
+        }
+
+        private void RestorePipeParameters(Pipe pipe, Dictionary<string, object> parameters)
+        {
+            foreach (var kvp in parameters)
             {
                 try
                 {
-                    doc.Create.NewUnionFitting(conn1, conn2);
+                    Parameter param = pipe.LookupParameter(kvp.Key);
+                    if (param == null || param.IsReadOnly) continue;
+
+                    switch (param.StorageType)
+                    {
+                        case StorageType.Double:
+                            if (kvp.Value is double)
+                                param.Set((double)kvp.Value);
+                            break;
+                        case StorageType.Integer:
+                            if (kvp.Value is int)
+                                param.Set((int)kvp.Value);
+                            break;
+                        case StorageType.String:
+                            if (kvp.Value is string)
+                                param.Set((string)kvp.Value);
+                            break;
+                        case StorageType.ElementId:
+                            if (kvp.Value is ElementId)
+                                param.Set((ElementId)kvp.Value);
+                            break;
+                    }
                 }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"Could not create union fitting: {ex.Message}");
-                }
+                catch { }
             }
         }
 
-        private Connector GetConnectorAtEnd(Pipe pipe, bool start)
-        {
-            LocationCurve locCurve = pipe.Location as LocationCurve;
-            if (locCurve == null) return null;
-
-            Line pipeLine = locCurve.Curve as Line;
-            if (pipeLine == null) return null;
-
-            XYZ endPoint = start ? pipeLine.GetEndPoint(0) : pipeLine.GetEndPoint(1);
-            return GetConnectorNearPoint(pipe, endPoint);
-        }
-
-        private Connector GetConnectorNearPoint(Pipe pipe, XYZ point)
-        {
-            ConnectorSet connectors = pipe.ConnectorManager.Connectors;
-            return connectors.Cast<Connector>().OrderBy(c => c.Origin.DistanceTo(point)).FirstOrDefault();
-        }
         #endregion
 
-        #region Parameter Copying
-        private void CopyPipeParameters(Pipe source, Pipe target)
+        #region Insulation Creation
+
+        private PipeInsulation AddInsulationToPipe(Document doc, Pipe pipe, InsulationData insulationData)
         {
-            var ignoredParams = new List<BuiltInParameter>
+            try
             {
-                BuiltInParameter.CURVE_ELEM_LENGTH,
-                BuiltInParameter.RBS_PIPE_DIAMETER_PARAM,
-                BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM,
-                BuiltInParameter.RBS_START_OFFSET_PARAM,
-                BuiltInParameter.RBS_END_OFFSET_PARAM
-            };
+                // Check if pipe already has insulation
+                FilteredElementCollector collector = new FilteredElementCollector(doc);
+                var existingInsulation = collector
+                    .OfClass(typeof(PipeInsulation))
+                    .Cast<PipeInsulation>()
+                    .FirstOrDefault(ins => ins.HostElementId == pipe.Id);
 
-            foreach (Parameter sourceParam in source.Parameters)
-            {
-                if (sourceParam.IsReadOnly || !sourceParam.HasValue || (sourceParam.Definition != null && ignoredParams.Contains((BuiltInParameter)sourceParam.Id.IntegerValue)))
-                    continue;
-
-                Parameter targetParam = target.get_Parameter(sourceParam.Definition);
-                if (targetParam != null && !targetParam.IsReadOnly)
+                if (existingInsulation != null)
                 {
-                    try
-                    {
-                        switch (sourceParam.StorageType)
-                        {
-                            case StorageType.Double:
-                                targetParam.Set(sourceParam.AsDouble());
-                                break;
-                            case StorageType.Integer:
-                                targetParam.Set(sourceParam.AsInteger());
-                                break;
-                            case StorageType.String:
-                                targetParam.Set(sourceParam.AsString());
-                                break;
-                            case StorageType.ElementId:
-                                targetParam.Set(sourceParam.AsElementId());
-                                break;
-                        }
-                    }
-                    catch
-                    {
-                        // Fails silently if a parameter can't be set
-                    }
+                    // Update existing insulation
+                    CopyInsulationParameters(existingInsulation, insulationData);
+                    return existingInsulation;
                 }
+
+                // Create new insulation
+                PipeInsulation newInsulation = PipeInsulation.Create(
+                    doc, pipe.Id, insulationData.InsulationTypeId, insulationData.Thickness);
+
+                if (newInsulation != null)
+                {
+                    CopyInsulationParameters(newInsulation, insulationData);
+                }
+
+                return newInsulation;
+            }
+            catch (Exception ex)
+            {
+                TaskDialog.Show("Warning", $"Failed to add insulation to pipe: {ex.Message}");
+                return null;
             }
         }
-        #endregion
 
-        #region Selection Filters
-        public class PipeSelectionFilter : ISelectionFilter
+        private void CopyInsulationParameters(PipeInsulation targetInsulation, InsulationData sourceData)
         {
-            public bool AllowElement(Element elem) => elem is Pipe;
-            public bool AllowReference(Reference reference, XYZ position) => false;
+            foreach (var kvp in sourceData.Parameters)
+            {
+                try
+                {
+                    Parameter param = targetInsulation.LookupParameter(kvp.Key);
+                    if (param == null || param.IsReadOnly) continue;
+
+                    switch (param.StorageType)
+                    {
+                        case StorageType.Double:
+                            if (kvp.Value is double)
+                                param.Set((double)kvp.Value);
+                            break;
+                        case StorageType.Integer:
+                            if (kvp.Value is int)
+                                param.Set((int)kvp.Value);
+                            break;
+                        case StorageType.String:
+                            if (kvp.Value is string)
+                                param.Set((string)kvp.Value);
+                            break;
+                        case StorageType.ElementId:
+                            if (kvp.Value is ElementId)
+                                param.Set((ElementId)kvp.Value);
+                            break;
+                    }
+                }
+                catch { }
+            }
         }
 
-        public class ModelCurveSelectionFilter : ISelectionFilter
-        {
-            public bool AllowElement(Element elem) => elem is ModelCurve;
-            public bool AllowReference(Reference reference, XYZ position) => false;
-        }
         #endregion
 
-        #region Button Data
+        #region Utility Methods
+
         internal static PushButtonData GetButtonData()
         {
             string buttonInternalName = "btnPipeSplitter";
             string buttonTitle = "Split Pipe";
 
-            ButtonDataClass myButtonData = new ButtonDataClass(
+            Common.ButtonDataClass myButtonData = new Common.ButtonDataClass(
                 buttonInternalName,
                 buttonTitle,
                 MethodBase.GetCurrentMethod().DeclaringType?.FullName,
-                Properties.Resources.Green_32,
-                Properties.Resources.Green_16,
-                "Splits a pipe into two segments at a model line intersection, preserving connections and insulation.");
+                Properties.Resources.Blue_32,
+                Properties.Resources.Blue_16,
+                "Splits a pipe at a selected point and copies insulation parameters to both segments");
 
             return myButtonData.Data;
         }
+
         #endregion
+    }
+
+    public class PipeSelectionFilter : ISelectionFilter
+    {
+        public bool AllowElement(Element elem)
+        {
+            return elem is Pipe;
+        }
+
+        public bool AllowReference(Reference reference, XYZ position)
+        {
+            return false;
+        }
     }
 }
