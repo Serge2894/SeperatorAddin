@@ -45,6 +45,15 @@
 	  <VendorId>com.YOUR COMPANY NAME</VendorId>
 	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
   </AddIn>
+  <AddIn Type="Command">
+	  <Text>SeperatorAddin - cmdPipeSplitter</Text>
+	  <Description>Some description</Description>
+	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
+	  <FullClassName>SeperatorAddin.cmdPipeSplitter</FullClassName>
+	  <ClientId>510CA9BC-8063-4A21-8E9A-9384B19F6B18</ClientId>
+	  <VendorId>com.YOUR COMPANY NAME</VendorId>
+	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
+  </AddIn>
   <AddIn Type="Application">
     <Name>SeperatorAddin</Name>
     <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
