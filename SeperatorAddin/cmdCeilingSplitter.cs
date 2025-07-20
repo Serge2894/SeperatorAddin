@@ -47,7 +47,7 @@ namespace SeperatorAddin
                 // Select ONE model line
                 Reference lineRef = uiDoc.Selection.PickObject(
                     ObjectType.Element,
-                    new ModelCurveSelectionFilter(),
+                    new Utils.ModelCurveSelectionFilter(),
                     "Select ONE straight model line that crosses the ceiling");
 
                 ModelCurve modelLine = doc.GetElement(lineRef) as ModelCurve;

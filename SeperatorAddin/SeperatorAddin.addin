@@ -27,6 +27,15 @@
 	  <VendorId>com.YOUR COMPANY NAME</VendorId>
 	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
   </AddIn>
+  <AddIn Type="Command">
+	  <Text>SeperatorAddin - cmdWallSplitter</Text>
+	  <Description>Some description</Description>
+	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
+	  <FullClassName>SeperatorAddin.cmdWallSplitter</FullClassName>
+	  <ClientId>CE323A5F-D949-4095-89FE-D0CE69B5680E</ClientId>
+	  <VendorId>com.YOUR COMPANY NAME</VendorId>
+	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
+  </AddIn>
   <AddIn Type="Application">
     <Name>SeperatorAddin</Name>
     <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
