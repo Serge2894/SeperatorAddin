@@ -1,4 +1,4 @@
-﻿using Autodesk.Revit.DB;
+using Autodesk.Revit.DB;
 using Autodesk.Revit.DB.Plumbing;
 using Autodesk.Revit.UI.Selection;
 using SeperatorAddin.Common;
@@ -127,7 +127,7 @@ namespace SeperatorAddin
                         pipe1.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM)?.Set(pipeProps.Diameter);
                         pipe2.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM)?.Set(pipeProps.Diameter);
 
-                        // ** COPY PARAMETERS FROM ORIGINAL PIPE **
+                        // Copy parameters from original pipe
                         CopyPipeParameters(selectedPipe, pipe1);
                         CopyPipeParameters(selectedPipe, pipe2);
 
@@ -305,7 +305,7 @@ namespace SeperatorAddin
 
             foreach (Parameter sourceParam in source.Parameters)
             {
-                if (sourceParam.IsReadOnly || !sourceParam.HasValue || ignoredParams.Contains((BuiltInParameter)sourceParam.Id.IntegerValue))
+                if (sourceParam.IsReadOnly || !sourceParam.HasValue || (sourceParam.Definition != null && ignoredParams.Contains((BuiltInParameter)sourceParam.Id.IntegerValue)))
                     continue;
 
                 Parameter targetParam = target.get_Parameter(sourceParam.Definition);
