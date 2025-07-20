@@ -129,9 +129,5 @@
 	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 	  </None>
 	</ItemGroup>
-	
-	<ItemGroup>
-	  <Folder Include="Forms\" />
-	</ItemGroup>
   
 </Project>

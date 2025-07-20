@@ -54,6 +54,15 @@
 	  <VendorId>com.YOUR COMPANY NAME</VendorId>
 	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
   </AddIn>
+  <AddIn Type="Command">
+	  <Text>SeperatorAddin - cmdColumnSplit</Text>
+	  <Description>Some description</Description>
+	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
+	  <FullClassName>SeperatorAddin.cmdColumnSplit</FullClassName>
+	  <ClientId>BF694962-EDD8-49ED-847B-6FE63916E6E3</ClientId>
+	  <VendorId>com.YOUR COMPANY NAME</VendorId>
+	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
+  </AddIn>
   <AddIn Type="Application">
     <Name>SeperatorAddin</Name>
     <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
