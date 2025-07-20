@@ -10,7 +10,7 @@ namespace SeperatorAddin
     [Transaction(TransactionMode.Manual)]
     public class cmdWallSeperator : IExternalCommand
     {
-        // Tolerance for geometric comparisons
+        // Tolerance for geometric comparisonsA
         private const double TOLERANCE = 0.001; // 1/16" in feet
         private const double ANGLE_TOLERANCE = 0.01; // Radians
         private const double MAX_EXTENSION = 5.0; // Maximum extension distance in feet
