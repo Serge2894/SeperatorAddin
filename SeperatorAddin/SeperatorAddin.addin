@@ -72,6 +72,15 @@
 	  <VendorId>com.YOUR COMPANY NAME</VendorId>
 	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
   </AddIn>
+  <AddIn Type="Command">
+	  <Text>SeperatorAddin - cmdFramingSplitter</Text>
+	  <Description>Some description</Description>
+	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
+	  <FullClassName>SeperatorAddin.cmdFramingSplitter</FullClassName>
+	  <ClientId>FCB05243-A125-4854-8397-9A484496E6C6</ClientId>
+	  <VendorId>com.YOUR COMPANY NAME</VendorId>
+	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
+  </AddIn>
   <AddIn Type="Application">
     <Name>SeperatorAddin</Name>
     <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
