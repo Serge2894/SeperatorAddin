@@ -73,11 +73,29 @@
 	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
   </AddIn>
   <AddIn Type="Command">
+	  <Text>SeperatorAddin - cmdDuctSplit</Text>
+	  <Description>Some description</Description>
+	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
+	  <FullClassName>SeperatorAddin.cmdDuctSplit</FullClassName>
+	  <ClientId>1AE0AADD-245D-4A14-B536-B0F39D4073DF</ClientId>
+	  <VendorId>com.YOUR COMPANY NAME</VendorId>
+	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
 	  <Text>SeperatorAddin - cmdFramingSplitter</Text>
 	  <Description>Some description</Description>
 	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
 	  <FullClassName>SeperatorAddin.cmdFramingSplitter</FullClassName>
-	  <ClientId>FCB05243-A125-4854-8397-9A484496E6C6</ClientId>
+	  <ClientId>CC068170-6650-4AAB-A884-0AD0BC6D7840</ClientId>
+	  <VendorId>com.YOUR COMPANY NAME</VendorId>
+	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+	  <Text>SeperatorAddin - cmdPipeSplit</Text>
+	  <Description>Some description</Description>
+	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
+	  <FullClassName>SeperatorAddin.cmdPipeSplit</FullClassName>
+	  <ClientId>C6876D53-B602-40F8-8E24-726B22F49841</ClientId>
 	  <VendorId>com.YOUR COMPANY NAME</VendorId>
 	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
   </AddIn>

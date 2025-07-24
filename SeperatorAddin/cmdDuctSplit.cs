@@ -6,10 +6,10 @@ using Autodesk.Revit.UI.Selection;
 using SeperatorAddin.Forms;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
-using System.Reflection;
 
-namespace SeperatorAddin.Forms
+namespace SeperatorAddin
 {
     [Transaction(TransactionMode.Manual)]
     public class cmdDuctSplit : IExternalCommand
@@ -22,97 +22,53 @@ namespace SeperatorAddin.Forms
 
             try
             {
-                // Get all ducts in the model
-                FilteredElementCollector ductCollector = new FilteredElementCollector(doc)
-                    .OfClass(typeof(Duct))
-                    .WhereElementIsNotElementType();
-
-                List<Duct> allDucts = ductCollector.Cast<Duct>().ToList();
-
-                if (allDucts.Count == 0)
+                IList<Reference> ductRefs;
+                try
                 {
-                    TaskDialog.Show("No Ducts", "No ducts found in the model.");
-                    return Result.Cancelled;
+                    ISelectionFilter ductFilter = new DuctSelectionFilter();
+                    ductRefs = uidoc.Selection.PickObjects(ObjectType.Element, ductFilter, "Select vertical ducts to split");
                 }
+                catch (Autodesk.Revit.Exceptions.OperationCanceledException) { return Result.Cancelled; }
 
-                // Get all levels in the model
-                FilteredElementCollector levelCollector = new FilteredElementCollector(doc)
-                    .OfClass(typeof(Level));
+                if (ductRefs == null || ductRefs.Count == 0) return Result.Cancelled;
+                List<Duct> selectedDucts = ductRefs.Select(r => doc.GetElement(r)).Cast<Duct>().ToList();
 
-                List<Level> allLevels = levelCollector.Cast<Level>()
-                    .OrderBy(l => l.Elevation)
-                    .ToList();
-
+                var allLevels = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().OrderBy(l => l.Elevation).ToList();
                 if (allLevels.Count < 2)
                 {
-                    TaskDialog.Show("Insufficient Levels", "At least 2 levels are required to split ducts.");
+                    TaskDialog.Show("Error", "At least 2 levels are required in the project.");
                     return Result.Cancelled;
                 }
 
-                // Show duct selection form
-                DuctSelectionForm form = new DuctSelectionForm(allDucts, allLevels);
-
+                var levelDisplayNames = allLevels.Select(l => $"{l.Name} (Elev: {l.Elevation:F2}')").ToList();
+                var form = new DuctSelectionForm(levelDisplayNames);
                 if (form.ShowDialog() != true)
                 {
                     return Result.Cancelled;
                 }
 
-                List<Duct> selectedDucts = form.SelectedDucts;
-                List<Level> selectedLevels = form.SelectedLevels.OrderBy(l => l.Elevation).ToList();
-
-                if (selectedDucts.Count == 0)
+                var selectedLevelDisplayNames = form.SelectedLevelNames;
+                if (selectedLevelDisplayNames.Count < 2)
                 {
-                    TaskDialog.Show("No Selection", "No ducts selected.");
+                    TaskDialog.Show("Error", "Please select at least 2 levels.");
                     return Result.Cancelled;
                 }
+                List<Level> selectedLevels = allLevels.Where(l => selectedLevelDisplayNames.Contains($"{l.Name} (Elev: {l.Elevation:F2}')")).ToList();
 
-                if (selectedLevels.Count < 2)
-                {
-                    TaskDialog.Show("Insufficient Levels", "At least 2 levels must be selected.");
-                    return Result.Cancelled;
-                }
-
-                // Process the selected ducts
-                using (Transaction trans = new Transaction(doc, "Split Ducts by Level"))
+                using (var trans = new Transaction(doc, "Split Ducts by Level"))
                 {
                     trans.Start();
-
                     int successCount = 0;
                     int failCount = 0;
-                    List<string> errors = new List<string>();
-
                     foreach (Duct duct in selectedDucts)
                     {
-                        try
-                        {
-                            bool result = SplitDuctByLevels(doc, duct, selectedLevels);
-                            if (result)
-                                successCount++;
-                            else
-                                failCount++;
-                        }
-                        catch (Exception ex)
-                        {
+                        if (SplitDuctByLevels(doc, duct, selectedLevels))
+                            successCount++;
+                        else
                             failCount++;
-                            errors.Add($"Duct {duct.Id}: {ex.Message}");
-                        }
                     }
-
                     trans.Commit();
-
-                    // Show results
-                    string resultMessage = $"Split operation completed:\n" +
-                                         $"Successfully split: {successCount} ducts\n" +
-                                         $"Failed: {failCount} ducts";
-
-                    if (errors.Count > 0)
-                    {
-                        resultMessage += "\n\nErrors:\n" + string.Join("\n", errors.Take(10));
-                        if (errors.Count > 10)
-                            resultMessage += $"\n... and {errors.Count - 10} more errors";
-                    }
-
-                    TaskDialog.Show("Split Results", resultMessage);
+                    TaskDialog.Show("Success", $"Operation complete.\nSuccessfully split: {successCount}\nFailed to split: {failCount}");
                 }
 
                 return Result.Succeeded;
@@ -124,305 +80,96 @@ namespace SeperatorAddin.Forms
             }
         }
 
-        private bool SplitDuctByLevels(Document doc, Duct duct, List<Level> levels)
+        private bool SplitDuctByLevels(Document doc, Duct originalDuct, List<Level> selectedLevels)
         {
-            try
+            var locCurve = originalDuct.Location as LocationCurve;
+            if (locCurve == null || !(locCurve.Curve is Line ductLine)) return false;
+
+            XYZ startPoint = ductLine.GetEndPoint(0).Z < ductLine.GetEndPoint(1).Z ? ductLine.GetEndPoint(0) : ductLine.GetEndPoint(1);
+            XYZ endPoint = ductLine.GetEndPoint(0).Z < ductLine.GetEndPoint(1).Z ? ductLine.GetEndPoint(1) : ductLine.GetEndPoint(0);
+
+            if (Math.Abs(ductLine.Direction.Z) < 0.9) return false;
+
+            var elevations = new List<double> { startPoint.Z };
+            elevations.AddRange(selectedLevels.Select(l => l.Elevation)
+                .Where(e => e > startPoint.Z + 0.001 && e < endPoint.Z - 0.001));
+            elevations.Add(endPoint.Z);
+            elevations = elevations.Distinct().OrderBy(e => e).ToList();
+
+            if (elevations.Count < 2) return false;
+
+            var ductType = originalDuct.DuctType;
+            var systemTypeId = originalDuct.get_Parameter(BuiltInParameter.RBS_DUCT_SYSTEM_TYPE_PARAM).AsElementId();
+            var levelId = originalDuct.ReferenceLevel.Id;
+            var width = originalDuct.get_Parameter(BuiltInParameter.RBS_CURVE_WIDTH_PARAM).AsDouble();
+            var height = originalDuct.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM).AsDouble();
+
+            var newDucts = new List<Duct>();
+            for (int i = 0; i < elevations.Count - 1; i++)
             {
-                // Get duct geometry
-                LocationCurve locCurve = duct.Location as LocationCurve;
-                if (locCurve == null || !(locCurve.Curve is Line))
-                {
-                    // Skip non-linear ducts
-                    return false;
-                }
+                double z1 = elevations[i];
+                double z2 = elevations[i + 1];
 
-                Line ductLine = locCurve.Curve as Line;
-                XYZ startPoint = ductLine.GetEndPoint(0);
-                XYZ endPoint = ductLine.GetEndPoint(1);
+                if (Math.Abs(z2 - z1) < 0.01) continue;
 
-                // Check if duct is vertical or has significant vertical component
-                XYZ direction = (endPoint - startPoint).Normalize();
-                if (Math.Abs(direction.Z) < 0.1) // Nearly horizontal
-                {
-                    return false;
-                }
+                XYZ p1 = new XYZ(startPoint.X, startPoint.Y, z1);
+                XYZ p2 = new XYZ(startPoint.X, startPoint.Y, z2);
 
-                // Find intersection points with levels
-                List<double> splitHeights = new List<double>();
+                Duct newDuct = Duct.Create(doc, systemTypeId, ductType.Id, levelId, p1, p2);
+                newDuct.get_Parameter(BuiltInParameter.RBS_CURVE_WIDTH_PARAM).Set(width);
+                newDuct.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM).Set(height);
+                CopyAllDuctParameters(originalDuct, newDuct);
+                newDucts.Add(newDuct);
+            }
 
-                foreach (Level level in levels)
-                {
-                    double levelElevation = level.Elevation;
-
-                    // Check if level intersects with duct
-                    if ((levelElevation > Math.Min(startPoint.Z, endPoint.Z) + 0.001) &&
-                        (levelElevation < Math.Max(startPoint.Z, endPoint.Z) - 0.001))
-                    {
-                        splitHeights.Add(levelElevation);
-                    }
-                }
-
-                if (splitHeights.Count == 0)
-                {
-                    // No intersections found
-                    return false;
-                }
-
-                // Sort split heights
-                splitHeights.Sort();
-
-                // Store original duct properties
-                DuctType ductType = doc.GetElement(duct.GetTypeId()) as DuctType;
-                MEPSystem system = duct.MEPSystem;
-
-                // Get duct dimensions
-                double width = duct.get_Parameter(BuiltInParameter.RBS_CURVE_WIDTH_PARAM).AsDouble();
-                double height = duct.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM).AsDouble();
-
-                // Store connectors and their connections
-                List<Connector> originalConnectors = GetDuctConnectors(duct);
-                Dictionary<Connector, List<Connector>> originalConnections = new Dictionary<Connector, List<Connector>>();
-
-                foreach (Connector conn in originalConnectors)
-                {
-                    originalConnections[conn] = GetConnectedConnectors(conn);
-                }
-
-                // Calculate split points
-                List<XYZ> splitPoints = new List<XYZ>();
-                splitPoints.Add(startPoint); // Add start point
-
-                foreach (double h in splitHeights)
-                {
-                    // Calculate parameter on line for this height
-                    double t = (h - startPoint.Z) / (endPoint.Z - startPoint.Z);
-                    XYZ splitPoint = startPoint + t * (endPoint - startPoint);
-                    splitPoints.Add(splitPoint);
-                }
-
-                splitPoints.Add(endPoint); // Add end point
-
-                // Create new duct segments
-                List<Duct> newDucts = new List<Duct>();
-
-                for (int i = 0; i < splitPoints.Count - 1; i++)
-                {
-                    XYZ segmentStart = splitPoints[i];
-                    XYZ segmentEnd = splitPoints[i + 1];
-
-                    // Create new duct
-                    Duct newDuct = Duct.Create(doc,
-                        doc.GetElement(duct.LevelId) as Level,
-                        ductType.Id,
-                        segmentStart,
-                        segmentEnd);
-
-                    // Set dimensions
-                    newDuct.get_Parameter(BuiltInParameter.RBS_CURVE_WIDTH_PARAM).Set(width);
-                    newDuct.get_Parameter(BuiltInParameter.RBS_CURVE_HEIGHT_PARAM).Set(height);
-
-                    // Copy other parameters
-                    CopyDuctParameters(duct, newDuct);
-
-                    newDucts.Add(newDuct);
-                }
-
-                // Connect the new ducts together
-                for (int i = 0; i < newDucts.Count - 1; i++)
-                {
-                    ConnectDucts(newDucts[i], newDucts[i + 1]);
-                }
-
-                // Reconnect to original connections at start and end
-                if (newDucts.Count > 0)
-                {
-                    // Reconnect start
-                    Connector firstDuctStartConnector = GetConnectorAtPoint(newDucts[0], splitPoints[0]);
-                    if (firstDuctStartConnector != null)
-                    {
-                        Connector originalStartConnector = GetConnectorAtPoint(duct, startPoint);
-                        if (originalStartConnector != null && originalConnections.ContainsKey(originalStartConnector))
-                        {
-                            foreach (Connector conn in originalConnections[originalStartConnector])
-                            {
-                                if (conn.Owner.Id != duct.Id)
-                                {
-                                    try { firstDuctStartConnector.ConnectTo(conn); } catch { }
-                                }
-                            }
-                        }
-                    }
-
-                    // Reconnect end
-                    Connector lastDuctEndConnector = GetConnectorAtPoint(newDucts[newDucts.Count - 1], splitPoints[splitPoints.Count - 1]);
-                    if (lastDuctEndConnector != null)
-                    {
-                        Connector originalEndConnector = GetConnectorAtPoint(duct, endPoint);
-                        if (originalEndConnector != null && originalConnections.ContainsKey(originalEndConnector))
-                        {
-                            foreach (Connector conn in originalConnections[originalEndConnector])
-                            {
-                                if (conn.Owner.Id != duct.Id)
-                                {
-                                    try { lastDuctEndConnector.ConnectTo(conn); } catch { }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Delete original duct
-                doc.Delete(duct.Id);
-
+            if (newDucts.Any())
+            {
+                doc.Delete(originalDuct.Id);
                 return true;
             }
-            catch (Exception)
-            {
-                return false;
-            }
+            return false;
         }
 
-        private List<Connector> GetDuctConnectors(Duct duct)
+        private void CopyAllDuctParameters(Duct source, Duct target)
         {
-            List<Connector> connectors = new List<Connector>();
-            ConnectorSet connectorSet = duct.ConnectorManager.Connectors;
+            var ignoredParams = new List<BuiltInParameter> { BuiltInParameter.CURVE_ELEM_LENGTH, BuiltInParameter.RBS_CURVE_WIDTH_PARAM, BuiltInParameter.RBS_CURVE_HEIGHT_PARAM };
 
-            foreach (Connector connector in connectorSet)
+            foreach (Parameter sourceParam in source.Parameters)
             {
-                connectors.Add(connector);
-            }
-
-            return connectors;
-        }
-
-        private List<Connector> GetConnectedConnectors(Connector connector)
-        {
-            List<Connector> connected = new List<Connector>();
-
-            foreach (Connector conn in connector.AllRefs)
-            {
-                connected.Add(conn);
-            }
-
-            return connected;
-        }
-
-        private Connector GetConnectorAtPoint(Duct duct, XYZ point)
-        {
-            const double tolerance = 0.001;
-
-            foreach (Connector connector in duct.ConnectorManager.Connectors)
-            {
-                if (connector.Origin.IsAlmostEqualTo(point, tolerance))
+                if (sourceParam.IsReadOnly || !sourceParam.HasValue) continue;
+                if (Enum.IsDefined(typeof(BuiltInParameter), sourceParam.Id.IntegerValue))
                 {
-                    return connector;
+                    if (ignoredParams.Contains((BuiltInParameter)sourceParam.Id.IntegerValue)) continue;
                 }
-            }
 
-            return null;
-        }
-
-        private void ConnectDucts(Duct duct1, Duct duct2)
-        {
-            try
-            {
-                // Get the closest connectors between the two ducts
-                Connector conn1 = null;
-                Connector conn2 = null;
-                double minDistance = double.MaxValue;
-
-                foreach (Connector c1 in duct1.ConnectorManager.Connectors)
+                Parameter targetParam = target.get_Parameter(sourceParam.Definition);
+                if (targetParam != null && !targetParam.IsReadOnly)
                 {
-                    foreach (Connector c2 in duct2.ConnectorManager.Connectors)
+                    try
                     {
-                        double distance = c1.Origin.DistanceTo(c2.Origin);
-                        if (distance < minDistance)
+                        // **FIXED CODE BLOCK**
+                        switch (sourceParam.StorageType)
                         {
-                            minDistance = distance;
-                            conn1 = c1;
-                            conn2 = c2;
+                            case StorageType.Double:
+                                targetParam.Set(sourceParam.AsDouble());
+                                break;
+                            case StorageType.Integer:
+                                targetParam.Set(sourceParam.AsInteger());
+                                break;
+                            case StorageType.String:
+                                targetParam.Set(sourceParam.AsString());
+                                break;
+                            case StorageType.ElementId:
+                                targetParam.Set(sourceParam.AsElementId());
+                                break;
                         }
                     }
-                }
-
-                if (conn1 != null && conn2 != null && minDistance < 1.0) // Within 1 foot
-                {
-                    conn1.ConnectTo(conn2);
-                }
-            }
-            catch { }
-        }
-
-        private void CopyDuctParameters(Duct source, Duct target)
-        {
-            try
-            {
-                // Copy system type if possible
-                Parameter sourceSystemType = source.get_Parameter(BuiltInParameter.RBS_DUCT_SYSTEM_TYPE_PARAM);
-                Parameter targetSystemType = target.get_Parameter(BuiltInParameter.RBS_DUCT_SYSTEM_TYPE_PARAM);
-
-                if (sourceSystemType != null && targetSystemType != null && !targetSystemType.IsReadOnly)
-                {
-                    targetSystemType.Set(sourceSystemType.AsElementId());
-                }
-
-                // Copy other relevant parameters
-                CopyParameter(source, target, BuiltInParameter.RBS_DUCT_FLOW_PARAM);
-                CopyParameter(source, target, BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
-                CopyParameter(source, target, BuiltInParameter.ALL_MODEL_MARK);
-
-                // Copy insulation if present
-                CopyParameter(source, target, BuiltInParameter.RBS_REFERENCE_INSULATION_TYPE);
-                CopyParameter(source, target, BuiltInParameter.RBS_REFERENCE_INSULATION_THICKNESS);
-                CopyParameter(source, target, BuiltInParameter.RBS_REFERENCE_LINING_TYPE);
-                CopyParameter(source, target, BuiltInParameter.RBS_REFERENCE_LINING_THICKNESS);
-            }
-            catch { }
-        }
-
-        private void CopyParameter(Element source, Element target, BuiltInParameter param)
-        {
-            try
-            {
-                Parameter sourceParam = source.get_Parameter(param);
-                Parameter targetParam = target.get_Parameter(param);
-
-                if (sourceParam != null && targetParam != null && !targetParam.IsReadOnly)
-                {
-                    switch (sourceParam.StorageType)
+                    catch (Exception ex)
                     {
-                        case StorageType.Double:
-                            targetParam.Set(sourceParam.AsDouble());
-                            break;
-                        case StorageType.Integer:
-                            targetParam.Set(sourceParam.AsInteger());
-                            break;
-                        case StorageType.String:
-                            targetParam.Set(sourceParam.AsString());
-                            break;
-                        case StorageType.ElementId:
-                            targetParam.Set(sourceParam.AsElementId());
-                            break;
+                        Debug.WriteLine($"Could not set parameter {sourceParam.Definition.Name}: {ex.Message}");
                     }
                 }
             }
-            catch { }
-        }
-
-        internal static PushButtonData GetButtonData()
-        {
-            string buttonInternalName = "btnDuctSplit";
-            string buttonTitle = "Split Ducts\nby Level";
-
-            Common.ButtonDataClass myButtonData = new Common.ButtonDataClass(
-                buttonInternalName,
-                buttonTitle,
-                MethodBase.GetCurrentMethod().DeclaringType?.FullName,
-                Properties.Resources.Yellow_32,
-                Properties.Resources.Yellow_16,
-                "Splits selected ducts at level intersections");
-
-            return myButtonData.Data;
         }
     }
 }

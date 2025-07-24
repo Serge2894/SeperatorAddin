@@ -7,7 +7,6 @@ using SeperatorAddin.Forms;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Reflection;
 
 namespace SeperatorAddin
 {
@@ -22,97 +21,69 @@ namespace SeperatorAddin
 
             try
             {
-                // Get all pipes in the model
-                FilteredElementCollector pipeCollector = new FilteredElementCollector(doc)
-                    .OfClass(typeof(Pipe))
-                    .WhereElementIsNotElementType();
-
-                List<Pipe> allPipes = pipeCollector.Cast<Pipe>().ToList();
-
-                if (allPipes.Count == 0)
+                // 1. Select pipes from the model first
+                IList<Reference> pipeRefs;
+                try
                 {
-                    TaskDialog.Show("No Pipes", "No pipes found in the model.");
+                    ISelectionFilter pipeFilter = new PipeSelectionFilter();
+                    pipeRefs = uidoc.Selection.PickObjects(ObjectType.Element, pipeFilter, "Select vertical pipes to split");
+                }
+                catch (Autodesk.Revit.Exceptions.OperationCanceledException)
+                {
                     return Result.Cancelled;
                 }
 
-                // Get all levels in the model
-                FilteredElementCollector levelCollector = new FilteredElementCollector(doc)
-                    .OfClass(typeof(Level));
+                if (pipeRefs == null || pipeRefs.Count == 0) return Result.Cancelled;
+                List<Pipe> selectedPipes = pipeRefs.Select(r => doc.GetElement(r)).Cast<Pipe>().ToList();
 
-                List<Level> allLevels = levelCollector.Cast<Level>()
-                    .OrderBy(l => l.Elevation)
-                    .ToList();
-
+                // 2. Get levels to populate the form
+                var allLevels = new FilteredElementCollector(doc).OfClass(typeof(Level)).Cast<Level>().OrderBy(l => l.Elevation).ToList();
                 if (allLevels.Count < 2)
                 {
-                    TaskDialog.Show("Insufficient Levels", "At least 2 levels are required to split pipes.");
+                    TaskDialog.Show("Error", "At least 2 levels are required in the project.");
                     return Result.Cancelled;
                 }
 
-                // Show pipe selection form
-                PipeSelectionForm form = new PipeSelectionForm(allPipes, allLevels);
-
+                // 3. Show form to select levels
+                List<string> levelNames = allLevels.Select(l => l.Name).ToList();
+                // NOTE: This assumes a PipeSelectionForm that takes List<string>
+                PipeSelectionForm form = new PipeSelectionForm(levelNames);
                 if (form.ShowDialog() != true)
                 {
                     return Result.Cancelled;
                 }
 
-                List<Pipe> selectedPipes = form.SelectedPipes;
-                List<Level> selectedLevels = form.SelectedLevels.OrderBy(l => l.Elevation).ToList();
-
-                if (selectedPipes.Count == 0)
+                // 4. Get selected levels from the form
+                List<string> selectedLevelNames = form.SelectedLevelNames;
+                if (selectedLevelNames.Count < 2)
                 {
-                    TaskDialog.Show("No Selection", "No pipes selected.");
+                    TaskDialog.Show("Error", "Please select at least 2 levels.");
                     return Result.Cancelled;
                 }
+                List<Level> selectedLevels = allLevels.Where(l => selectedLevelNames.Contains(l.Name)).ToList();
 
-                if (selectedLevels.Count < 2)
-                {
-                    TaskDialog.Show("Insufficient Levels", "At least 2 levels must be selected.");
-                    return Result.Cancelled;
-                }
-
-                // Process the selected pipes
-                using (Transaction trans = new Transaction(doc, "Split Pipes by Level"))
+                // 5. Perform the split operation
+                using (var trans = new Transaction(doc, "Split Pipes by Level"))
                 {
                     trans.Start();
 
                     int successCount = 0;
                     int failCount = 0;
-                    List<string> errors = new List<string>();
 
                     foreach (Pipe pipe in selectedPipes)
                     {
-                        try
+                        if (SplitPipeByLevels(doc, pipe, selectedLevels))
                         {
-                            bool result = SplitPipeByLevels(doc, pipe, selectedLevels);
-                            if (result)
-                                successCount++;
-                            else
-                                failCount++;
+                            successCount++;
                         }
-                        catch (Exception ex)
+                        else
                         {
                             failCount++;
-                            errors.Add($"Pipe {pipe.Id}: {ex.Message}");
                         }
                     }
 
                     trans.Commit();
-
-                    // Show results
-                    string resultMessage = $"Split operation completed:\n" +
-                                         $"Successfully split: {successCount} pipes\n" +
-                                         $"Failed: {failCount} pipes";
-
-                    if (errors.Count > 0)
-                    {
-                        resultMessage += "\n\nErrors:\n" + string.Join("\n", errors.Take(10));
-                        if (errors.Count > 10)
-                            resultMessage += $"\n... and {errors.Count - 10} more errors";
-                    }
-
-                    TaskDialog.Show("Split Results", resultMessage);
+                    TaskDialog.Show("Success", $"Operation complete.\nSuccessfully split: {successCount}\nFailed: {failCount}");
                 }
 
                 return Result.Succeeded;
@@ -124,294 +95,102 @@ namespace SeperatorAddin
             }
         }
 
+        /// <summary>
+        /// Splits a single vertical pipe at the specified levels.
+        /// </summary>
         private bool SplitPipeByLevels(Document doc, Pipe pipe, List<Level> levels)
         {
-            try
+            LocationCurve locCurve = pipe.Location as LocationCurve;
+            if (locCurve == null || !(locCurve.Curve is Line pipeLine)) return false;
+
+            XYZ startPoint = pipeLine.GetEndPoint(0);
+            XYZ endPoint = pipeLine.GetEndPoint(1);
+
+            // Only process pipes that are mostly vertical
+            if (Math.Abs(pipeLine.Direction.Z) < 0.9) return false;
+
+            // Find level elevations that are within the pipe's bounds
+            List<double> splitHeights = levels
+                .Select(l => l.Elevation)
+                .Where(e => e > Math.Min(startPoint.Z, endPoint.Z) + 0.001 && e < Math.Max(startPoint.Z, endPoint.Z) - 0.001)
+                .Distinct()
+                .OrderBy(h => h)
+                .ToList();
+
+            if (splitHeights.Count == 0) return false;
+
+            // Store original pipe properties
+            PipeType pipeType = pipe.PipeType;
+            ElementId systemTypeId = pipe.get_Parameter(BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM).AsElementId();
+            ElementId levelId = pipe.ReferenceLevel.Id;
+            double diameter = pipe.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM).AsDouble();
+
+            // Generate all points for new segments (start, intersections, end)
+            List<XYZ> splitPoints = new List<XYZ> { startPoint };
+            splitPoints.AddRange(splitHeights.Select(h => startPoint + ((h - startPoint.Z) / pipeLine.Direction.Z) * pipeLine.Direction));
+            splitPoints.Add(endPoint);
+            splitPoints = splitPoints.OrderBy(p => p.Z).Distinct().ToList();
+
+            List<Pipe> newPipes = new List<Pipe>();
+            for (int i = 0; i < splitPoints.Count - 1; i++)
             {
-                // Get pipe geometry
-                LocationCurve locCurve = pipe.Location as LocationCurve;
-                if (locCurve == null || !(locCurve.Curve is Line))
-                {
-                    // Skip non-linear pipes
-                    return false;
-                }
+                XYZ p1 = splitPoints[i];
+                XYZ p2 = splitPoints[i + 1];
 
-                Line pipeLine = locCurve.Curve as Line;
-                XYZ startPoint = pipeLine.GetEndPoint(0);
-                XYZ endPoint = pipeLine.GetEndPoint(1);
+                if (p1.DistanceTo(p2) < 0.01) continue; // Skip tiny segments
 
-                // Check if pipe is vertical or has significant vertical component
-                XYZ direction = (endPoint - startPoint).Normalize();
-                if (Math.Abs(direction.Z) < 0.1) // Nearly horizontal
-                {
-                    return false;
-                }
-
-                // Find intersection points with levels
-                List<double> splitHeights = new List<double>();
-
-                foreach (Level level in levels)
-                {
-                    double levelElevation = level.Elevation;
-
-                    // Check if level intersects with pipe
-                    if ((levelElevation > Math.Min(startPoint.Z, endPoint.Z) + 0.001) &&
-                        (levelElevation < Math.Max(startPoint.Z, endPoint.Z) - 0.001))
-                    {
-                        splitHeights.Add(levelElevation);
-                    }
-                }
-
-                if (splitHeights.Count == 0)
-                {
-                    // No intersections found
-                    return false;
-                }
-
-                // Sort split heights
-                splitHeights.Sort();
-
-                // Store original pipe properties
-                PipeType pipeType = doc.GetElement(pipe.GetTypeId()) as PipeType;
-                MEPSystem system = pipe.MEPSystem;
-                double diameter = pipe.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM).AsDouble();
-
-                // Store connectors and their connections
-                List<Connector> originalConnectors = GetPipeConnectors(pipe);
-                Dictionary<Connector, List<Connector>> originalConnections = new Dictionary<Connector, List<Connector>>();
-
-                foreach (Connector conn in originalConnectors)
-                {
-                    originalConnections[conn] = GetConnectedConnectors(conn);
-                }
-
-                // Calculate split points
-                List<XYZ> splitPoints = new List<XYZ>();
-                splitPoints.Add(startPoint); // Add start point
-
-                foreach (double height in splitHeights)
-                {
-                    // Calculate parameter on line for this height
-                    double t = (height - startPoint.Z) / (endPoint.Z - startPoint.Z);
-                    XYZ splitPoint = startPoint + t * (endPoint - startPoint);
-                    splitPoints.Add(splitPoint);
-                }
-
-                splitPoints.Add(endPoint); // Add end point
-
-                // Create new pipe segments
-                List<Pipe> newPipes = new List<Pipe>();
-
-                for (int i = 0; i < splitPoints.Count - 1; i++)
-                {
-                    XYZ segmentStart = splitPoints[i];
-                    XYZ segmentEnd = splitPoints[i + 1];
-
-                    // Create new pipe
-                    Pipe newPipe = Pipe.Create(doc, pipeType.Id,
-                        doc.GetElement(pipe.ReferenceLevel.Id) as Level,
-                        segmentStart, segmentEnd);
-
-                    // Set diameter
-                    newPipe.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM).Set(diameter);
-
-                    // Copy other parameters
-                    CopyPipeParameters(pipe, newPipe);
-
-                    newPipes.Add(newPipe);
-                }
-
-                // Connect the new pipes together
-                for (int i = 0; i < newPipes.Count - 1; i++)
-                {
-                    ConnectPipes(newPipes[i], newPipes[i + 1]);
-                }
-
-                // Reconnect to original connections at start and end
-                if (newPipes.Count > 0)
-                {
-                    // Reconnect start
-                    Connector firstPipeStartConnector = GetConnectorAtPoint(newPipes[0], splitPoints[0]);
-                    if (firstPipeStartConnector != null)
-                    {
-                        Connector originalStartConnector = GetConnectorAtPoint(pipe, startPoint);
-                        if (originalStartConnector != null && originalConnections.ContainsKey(originalStartConnector))
-                        {
-                            foreach (Connector conn in originalConnections[originalStartConnector])
-                            {
-                                if (conn.Owner.Id != pipe.Id)
-                                {
-                                    try { firstPipeStartConnector.ConnectTo(conn); } catch { }
-                                }
-                            }
-                        }
-                    }
-
-                    // Reconnect end
-                    Connector lastPipeEndConnector = GetConnectorAtPoint(newPipes[newPipes.Count - 1], splitPoints[splitPoints.Count - 1]);
-                    if (lastPipeEndConnector != null)
-                    {
-                        Connector originalEndConnector = GetConnectorAtPoint(pipe, endPoint);
-                        if (originalEndConnector != null && originalConnections.ContainsKey(originalEndConnector))
-                        {
-                            foreach (Connector conn in originalConnections[originalEndConnector])
-                            {
-                                if (conn.Owner.Id != pipe.Id)
-                                {
-                                    try { lastPipeEndConnector.ConnectTo(conn); } catch { }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Delete original pipe
-                doc.Delete(pipe.Id);
-
-                return true;
-            }
-            catch (Exception)
-            {
-                return false;
-            }
-        }
-
-        private List<Connector> GetPipeConnectors(Pipe pipe)
-        {
-            List<Connector> connectors = new List<Connector>();
-            ConnectorSet connectorSet = pipe.ConnectorManager.Connectors;
-
-            foreach (Connector connector in connectorSet)
-            {
-                connectors.Add(connector);
+                Pipe newPipe = Pipe.Create(doc, systemTypeId, pipeType.Id, levelId, p1, p2);
+                newPipe.get_Parameter(BuiltInParameter.RBS_PIPE_DIAMETER_PARAM).Set(diameter);
+                CopyPipeParameters(pipe, newPipe);
+                newPipes.Add(newPipe);
             }
 
-            return connectors;
-        }
+            if (newPipes.Count == 0) return false;
 
-        private List<Connector> GetConnectedConnectors(Connector connector)
-        {
-            List<Connector> connected = new List<Connector>();
+            // Delete the original pipe
+            doc.Delete(pipe.Id);
 
-            foreach (Connector conn in connector.AllRefs)
-            {
-                connected.Add(conn);
-            }
-
-            return connected;
-        }
-
-        private Connector GetConnectorAtPoint(Pipe pipe, XYZ point)
-        {
-            const double tolerance = 0.001;
-
-            foreach (Connector connector in pipe.ConnectorManager.Connectors)
-            {
-                if (connector.Origin.IsAlmostEqualTo(point, tolerance))
-                {
-                    return connector;
-                }
-            }
-
-            return null;
-        }
-
-        private void ConnectPipes(Pipe pipe1, Pipe pipe2)
-        {
-            try
-            {
-                // Get the closest connectors between the two pipes
-                Connector conn1 = null;
-                Connector conn2 = null;
-                double minDistance = double.MaxValue;
-
-                foreach (Connector c1 in pipe1.ConnectorManager.Connectors)
-                {
-                    foreach (Connector c2 in pipe2.ConnectorManager.Connectors)
-                    {
-                        double distance = c1.Origin.DistanceTo(c2.Origin);
-                        if (distance < minDistance)
-                        {
-                            minDistance = distance;
-                            conn1 = c1;
-                            conn2 = c2;
-                        }
-                    }
-                }
-
-                if (conn1 != null && conn2 != null && minDistance < 1.0) // Within 1 foot
-                {
-                    conn1.ConnectTo(conn2);
-                }
-            }
-            catch { }
+            return true;
         }
 
         private void CopyPipeParameters(Pipe source, Pipe target)
         {
-            try
-            {
-                // Copy system type if possible
-                Parameter sourceSystemType = source.get_Parameter(BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM);
-                Parameter targetSystemType = target.get_Parameter(BuiltInParameter.RBS_PIPING_SYSTEM_TYPE_PARAM);
-
-                if (sourceSystemType != null && targetSystemType != null && !targetSystemType.IsReadOnly)
-                {
-                    targetSystemType.Set(sourceSystemType.AsElementId());
-                }
-
-                // Copy other relevant parameters
-                CopyParameter(source, target, BuiltInParameter.RBS_PIPE_SLOPE);
-                CopyParameter(source, target, BuiltInParameter.RBS_PIPE_INVERT_ELEVATION);
-                CopyParameter(source, target, BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
-                CopyParameter(source, target, BuiltInParameter.ALL_MODEL_MARK);
-            }
-            catch { }
+            CopyParameter(source, target, BuiltInParameter.RBS_PIPE_SLOPE);
+            CopyParameter(source, target, BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS);
+            CopyParameter(source, target, BuiltInParameter.ALL_MODEL_MARK);
         }
 
-        private void CopyParameter(Element source, Element target, BuiltInParameter param)
+        private void CopyParameter(Element source, Element target, BuiltInParameter paramEnum)
         {
-            try
-            {
-                Parameter sourceParam = source.get_Parameter(param);
-                Parameter targetParam = target.get_Parameter(param);
+            Parameter sourceParam = source.get_Parameter(paramEnum);
+            Parameter targetParam = target.get_Parameter(paramEnum);
 
-                if (sourceParam != null && targetParam != null && !targetParam.IsReadOnly)
+            if (sourceParam != null && targetParam != null && !targetParam.IsReadOnly && sourceParam.HasValue)
+            {
+                switch (sourceParam.StorageType)
                 {
-                    switch (sourceParam.StorageType)
-                    {
-                        case StorageType.Double:
-                            targetParam.Set(sourceParam.AsDouble());
-                            break;
-                        case StorageType.Integer:
-                            targetParam.Set(sourceParam.AsInteger());
-                            break;
-                        case StorageType.String:
-                            targetParam.Set(sourceParam.AsString());
-                            break;
-                        case StorageType.ElementId:
-                            targetParam.Set(sourceParam.AsElementId());
-                            break;
-                    }
+                    case StorageType.Double:
+                        targetParam.Set(sourceParam.AsDouble());
+                        break;
+                    case StorageType.Integer:
+                        targetParam.Set(sourceParam.AsInteger());
+                        break;
+                    case StorageType.String:
+                        targetParam.Set(sourceParam.AsString());
+                        break;
+                    case StorageType.ElementId:
+                        targetParam.Set(sourceParam.AsElementId());
+                        break;
                 }
             }
-            catch { }
         }
+    }
 
-        internal static PushButtonData GetButtonData()
-        {
-            string buttonInternalName = "btnPipeSplit";
-            string buttonTitle = "Split Pipes\nby Level";
-
-            Common.ButtonDataClass myButtonData = new Common.ButtonDataClass(
-                buttonInternalName,
-                buttonTitle,
-                MethodBase.GetCurrentMethod().DeclaringType?.FullName,
-                Properties.Resources.Green_32,
-                Properties.Resources.Green_16,
-                "Splits selected pipes at level intersections");
-
-            return myButtonData.Data;
-        }
+    // NOTE: This class should only be defined ONCE in your project.
+    // If it's already in another file (like cmdPipeSplitter.cs), you can remove it from here.
+    public class PipeSelectionFilter : ISelectionFilter
+    {
+        public bool AllowElement(Element elem) => elem is Pipe;
+        public bool AllowReference(Reference reference, XYZ position) => false;
     }
 }
