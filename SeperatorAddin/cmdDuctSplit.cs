@@ -291,28 +291,6 @@ namespace SeperatorAddin
                     }
                 }
 
-                // Copy insulation thickness if present
-                var insulationParam = source.get_Parameter(BuiltInParameter.RBS_DUCT_INSULATION_THICKNESS);
-                if (insulationParam != null && insulationParam.HasValue)
-                {
-                    var targetInsulationParam = target.get_Parameter(BuiltInParameter.RBS_DUCT_INSULATION_THICKNESS);
-                    if (targetInsulationParam != null && !targetInsulationParam.IsReadOnly)
-                    {
-                        targetInsulationParam.Set(insulationParam.AsDouble());
-                    }
-                }
-
-                // Copy lining thickness if present
-                var liningParam = source.get_Parameter(BuiltInParameter.RBS_DUCT_LINING_THICKNESS);
-                if (liningParam != null && liningParam.HasValue)
-                {
-                    var targetLiningParam = target.get_Parameter(BuiltInParameter.RBS_DUCT_LINING_THICKNESS);
-                    if (targetLiningParam != null && !targetLiningParam.IsReadOnly)
-                    {
-                        targetLiningParam.Set(liningParam.AsDouble());
-                    }
-                }
-
                 // Copy custom parameters
                 foreach (Parameter param in source.Parameters)
                 {
