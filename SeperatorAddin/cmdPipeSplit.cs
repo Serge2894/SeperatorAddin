@@ -62,9 +62,9 @@ namespace SeperatorAddin
 
                 // Get selected levels
                 var selectedLevelDisplayNames = form.SelectedLevelNames;
-                if (selectedLevelDisplayNames.Count < 2)
+                if (selectedLevelDisplayNames.Count < 1)
                 {
-                    TaskDialog.Show("Error", "Please select at least 2 levels.");
+                    TaskDialog.Show("Error", "Please select at least 1 level.");
                     return Result.Cancelled;
                 }
 
