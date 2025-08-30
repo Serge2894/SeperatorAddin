@@ -183,12 +183,25 @@ namespace SeperatorAddin
                     }
                 }
 
-                // Ensure we include a level below the base if needed
-                Level baseLevelForSplit = levels.LastOrDefault(l => l.ProjectElevation <= originalBaseElevation);
-                if (baseLevelForSplit != null && !relevantLevels.Contains(baseLevelForSplit))
+                // If the lowest relevant level is above the wall's base, create a segment for the lowest part
+                if (relevantLevels.Any() && originalBaseElevation < relevantLevels.First().ProjectElevation)
                 {
-                    relevantLevels.Insert(0, baseLevelForSplit);
+                    Level topLevelForBottomSegment = relevantLevels.First();
+                    double height = topLevelForBottomSegment.ProjectElevation - originalBaseElevation;
+                    Wall bottomWall = Wall.Create(doc, wallCurve, wallType.Id, originalBaseLevel.Id, height, originalBaseOffset, false, false);
+                    if (bottomWall != null)
+                    {
+                        // Set top constraint to the first relevant level
+                        Parameter newTopConstraint = bottomWall.get_Parameter(BuiltInParameter.WALL_HEIGHT_TYPE);
+                        if (newTopConstraint != null && !newTopConstraint.IsReadOnly)
+                        {
+                            newTopConstraint.Set(topLevelForBottomSegment.Id);
+                        }
+                        CopyAllWallParameters(originalWall, bottomWall);
+                        newWalls.Add(bottomWall);
+                    }
                 }
+
 
                 // If wall has edit profile, handle it specially
                 if (hasEditProfile)
@@ -394,7 +407,7 @@ namespace SeperatorAddin
             catch (Exception ex)
             {
                 // Log error but continue
-                Debug.WriteLine($"Error copying parameters: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Error copying parameters: {ex.Message}");
             }
         }
 
@@ -565,7 +578,7 @@ namespace SeperatorAddin
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error getting wall openings: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Error getting wall openings: {ex.Message}");
             }
 
             return openings;
@@ -597,7 +610,7 @@ namespace SeperatorAddin
                     }
                     catch (Exception ex)
                     {
-                        Debug.WriteLine($"Failed to apply opening: {ex.Message}");
+                        System.Diagnostics.Debug.WriteLine($"Failed to apply opening: {ex.Message}");
                     }
                 }
             }
@@ -694,7 +707,7 @@ namespace SeperatorAddin
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to create opening: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Failed to create opening: {ex.Message}");
                 // Don't throw - continue with other openings
             }
         }
