@@ -166,9 +166,6 @@ namespace SeperatorAddin
                     originalTopElevation = originalBaseElevation + height;
                 }
 
-                // Check if wall has edit profile
-                bool hasEditProfile = originalWall.SketchId != ElementId.InvalidElementId;
-
                 // Get wall openings information before creating new walls
                 List<WallOpeningInfo> openingInfos = GetWallOpenings(originalWall, originalBaseElevation);
 
@@ -198,18 +195,13 @@ namespace SeperatorAddin
                             newTopConstraint.Set(topLevelForBottomSegment.Id);
                         }
                         CopyAllWallParameters(originalWall, bottomWall);
+
+                        double segmentBaseElev = originalBaseElevation;
+                        double segmentTopElev = topLevelForBottomSegment.ProjectElevation;
+                        ApplyOpeningsToWall(doc, bottomWall, openingInfos, segmentBaseElev, segmentTopElev);
+
                         newWalls.Add(bottomWall);
                     }
-                }
-
-
-                // If wall has edit profile, handle it specially
-                if (hasEditProfile)
-                {
-                    // For walls with edit profile, we'll create the walls but won't try to recreate the profile
-                    // The user will need to edit the profile of the new walls manually
-                    TaskDialog.Show("Edit Profile Wall",
-                        "This wall has an edited profile. The wall will be split, but the profile openings will need to be recreated manually on each segment.");
                 }
 
                 // Create new walls between each pair of levels
@@ -255,13 +247,9 @@ namespace SeperatorAddin
                         // Copy all parameters from original wall
                         CopyAllWallParameters(originalWall, newWall);
 
-                        // Apply openings to this wall segment (skip edit profile openings)
-                        if (!hasEditProfile)
-                        {
-                            double segmentBaseElev = baseLevel.ProjectElevation + baseOffset;
-                            double segmentTopElev = topLevel.ProjectElevation + topOffset;
-                            ApplyOpeningsToWall(doc, newWall, openingInfos, segmentBaseElev, segmentTopElev);
-                        }
+                        double segmentBaseElev = baseLevel.ProjectElevation + baseOffset;
+                        double segmentTopElev = topLevel.ProjectElevation + topOffset;
+                        ApplyOpeningsToWall(doc, newWall, openingInfos, segmentBaseElev, segmentTopElev);
 
                         newWalls.Add(newWall);
                     }
@@ -297,12 +285,8 @@ namespace SeperatorAddin
 
                         CopyAllWallParameters(originalWall, topWall);
 
-                        // Apply openings to top segment (skip edit profile openings)
-                        if (!hasEditProfile)
-                        {
-                            double segmentBaseElev = lastLevel.ProjectElevation;
-                            ApplyOpeningsToWall(doc, topWall, openingInfos, segmentBaseElev, originalTopElevation);
-                        }
+                        double segmentBaseElev = lastLevel.ProjectElevation;
+                        ApplyOpeningsToWall(doc, topWall, openingInfos, segmentBaseElev, originalTopElevation);
 
                         newWalls.Add(topWall);
                     }
@@ -496,7 +480,7 @@ namespace SeperatorAddin
                 if (wall.SketchId != ElementId.InvalidElementId)
                 {
                     Sketch sketch = wall.Document.GetElement(wall.SketchId) as Sketch;
-                    if (sketch != null)
+                    if (sketch != null && (wall.Location as LocationCurve)?.Curve is Line line)
                     {
                         CurveArrArray profiles = sketch.Profile;
                         for (int i = 0; i < profiles.Size; i++)
@@ -504,25 +488,35 @@ namespace SeperatorAddin
                             CurveArray curveArray = profiles.get_Item(i);
                             if (i > 0) // First profile is the outer boundary
                             {
-                                List<Curve> profileCurves = new List<Curve>();
-                                double minZ = double.MaxValue;
-                                double maxZ = double.MinValue;
+                                // For edited profiles, we will approximate them with their bounding box
+                                // to create a rectangular opening.
+                                XYZ min = new XYZ(double.MaxValue, double.MaxValue, double.MaxValue);
+                                XYZ max = new XYZ(double.MinValue, double.MinValue, double.MinValue);
 
                                 foreach (Curve curve in curveArray)
                                 {
-                                    profileCurves.Add(curve);
-                                    XYZ start = curve.GetEndPoint(0);
-                                    XYZ end = curve.GetEndPoint(1);
-                                    minZ = Math.Min(minZ, Math.Min(start.Z, end.Z));
-                                    maxZ = Math.Max(maxZ, Math.Max(start.Z, end.Z));
+                                    XYZ p1 = curve.GetEndPoint(0);
+                                    XYZ p2 = curve.GetEndPoint(1);
+                                    min = new XYZ(Math.Min(min.X, p1.X), Math.Min(min.Y, p1.Y), Math.Min(min.Z, p1.Z));
+                                    max = new XYZ(Math.Max(max.X, p1.X), Math.Max(max.Y, p1.Y), Math.Max(max.Z, p1.Z));
+                                    min = new XYZ(Math.Min(min.X, p2.X), Math.Min(min.Y, p2.Y), Math.Min(min.Z, p2.Z));
+                                    max = new XYZ(Math.Max(max.X, p2.X), Math.Max(max.Y, p2.Y), Math.Max(max.Z, p2.Z));
                                 }
+
+                                // Project the min and max points onto the wall's location line to find the true width
+                                double paramMin = line.Project(min).Parameter;
+                                double paramMax = line.Project(max).Parameter;
+
+                                double openingWidth = Math.Abs(paramMax - paramMin);
 
                                 openings.Add(new WallOpeningInfo
                                 {
                                     Type = OpeningType.EditProfile,
-                                    BottomElevation = minZ,
-                                    TopElevation = maxZ,
-                                    ProfileCurves = profileCurves
+                                    BottomElevation = min.Z,
+                                    TopElevation = max.Z,
+                                    InsertPoint = (min + max) / 2.0,
+                                    Width = openingWidth,
+                                    Height = max.Z - min.Z
                                 });
                             }
                         }
@@ -596,11 +590,9 @@ namespace SeperatorAddin
                     {
                         switch (openingInfo.Type)
                         {
+                            // MODIFICATION: Treat EditProfile openings as rectangular openings
+                            // by creating a standard opening from their bounding box extents.
                             case OpeningType.EditProfile:
-                                // For edit profile openings, skip for now as they require special handling
-                                // The profile will be maintained through the wall type or we'll handle it differently
-                                break;
-
                             case OpeningType.RectangularOpening:
                             case OpeningType.ArcOpening:
                                 // Create new opening
@@ -625,149 +617,41 @@ namespace SeperatorAddin
                 LocationCurve locCurve = wall.Location as LocationCurve;
                 if (locCurve == null || !(locCurve.Curve is Line wallLine)) return;
 
-                // Get the original opening from the document if it still exists
-                Opening originalOpening = null;
-                if (openingInfo.OpeningId != ElementId.InvalidElementId)
-                {
-                    originalOpening = doc.GetElement(openingInfo.OpeningId) as Opening;
-                }
-
                 // Calculate opening bounds relative to new wall
                 double openingBottom = Math.Max(openingInfo.BottomElevation, wallBottomElev);
                 double openingTop = Math.Min(openingInfo.TopElevation, wallTopElev);
 
                 if (openingTop <= openingBottom) return;
 
-                // Get wall parameters
-                Level wallLevel = doc.GetElement(wall.LevelId) as Level;
-                double wallBaseOffset = wall.get_Parameter(BuiltInParameter.WALL_BASE_OFFSET).AsDouble();
-                double wallBaseElevation = wallLevel.ProjectElevation + wallBaseOffset;
-
-                // Calculate relative positions
-                double relativeBottom = openingBottom - wallBaseElevation;
-                double relativeTop = openingTop - wallBaseElevation;
-
                 // Get opening width
                 double openingWidth = openingInfo.Width;
-                if (openingWidth <= 0) openingWidth = 3.0; // Default 3 feet
+                if (openingWidth <= 0.01) return; // Skip openings that are too small
 
                 // Find the position along the wall
-                XYZ wallStart = wallLine.GetEndPoint(0);
-                XYZ wallEnd = wallLine.GetEndPoint(1);
                 XYZ wallDirection = wallLine.Direction;
 
                 // Project opening center onto wall line
                 IntersectionResult projection = wallLine.Project(openingInfo.InsertPoint);
                 if (projection == null) return;
 
-                // Calculate distance along wall
-                double distanceAlongWall = projection.Parameter * wallLine.Length;
+                XYZ projectedCenter = projection.XYZPoint;
 
                 // Calculate the start and end points of the opening
-                double startDistance = distanceAlongWall - (openingWidth / 2);
-                double endDistance = distanceAlongWall + (openingWidth / 2);
-
-                // Make sure opening is within wall bounds
-                startDistance = Math.Max(0, startDistance);
-                endDistance = Math.Min(wallLine.Length, endDistance);
+                XYZ openingStart = projectedCenter - wallDirection * (openingWidth / 2);
+                XYZ openingEnd = projectedCenter + wallDirection * (openingWidth / 2);
 
                 // Create points for rectangular opening
-                XYZ point1 = wallStart + wallDirection * startDistance;
-                XYZ point2 = wallStart + wallDirection * endDistance;
-
-                // Set the Z coordinates
-                point1 = new XYZ(point1.X, point1.Y, openingBottom);
-                point2 = new XYZ(point2.X, point2.Y, openingTop);
+                XYZ point1 = new XYZ(openingStart.X, openingStart.Y, openingBottom);
+                XYZ point2 = new XYZ(openingEnd.X, openingEnd.Y, openingTop);
 
                 // Create the opening using the correct method
-                if (openingInfo.Type == OpeningType.RectangularOpening)
-                {
-                    // For rectangular openings, create directly
-                    Opening newOpening = doc.Create.NewOpening(wall, point1, point2);
-                }
-                else if (openingInfo.Type == OpeningType.ArcOpening && originalOpening != null)
-                {
-                    // For arc openings, try to copy from original if possible
-                    try
-                    {
-                        // Get arc parameters from original opening
-                        CurveArray curveArray = originalOpening.BoundaryCurves;
-                        if (curveArray != null && curveArray.Size > 0)
-                        {
-                            // For now, create as rectangular - arc openings require special handling
-                            Opening newOpening = doc.Create.NewOpening(wall, point1, point2);
-                        }
-                    }
-                    catch
-                    {
-                        // Fallback to rectangular
-                        Opening newOpening = doc.Create.NewOpening(wall, point1, point2);
-                    }
-                }
+                doc.Create.NewOpening(wall, point1, point2);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Failed to create opening: {ex.Message}");
                 // Don't throw - continue with other openings
             }
-        }
-
-        private Curve ClipCurveToElevation(Curve curve, double bottomElev, double topElev)
-        {
-            try
-            {
-                XYZ start = curve.GetEndPoint(0);
-                XYZ end = curve.GetEndPoint(1);
-
-                // Check if curve needs clipping
-                if (start.Z >= bottomElev && start.Z <= topElev &&
-                    end.Z >= bottomElev && end.Z <= topElev)
-                {
-                    return curve; // No clipping needed
-                }
-
-                // Clip curve
-                XYZ newStart = start;
-                XYZ newEnd = end;
-
-                if (start.Z < bottomElev)
-                {
-                    double t = (bottomElev - start.Z) / (end.Z - start.Z);
-                    newStart = start + (end - start) * t;
-                }
-                else if (start.Z > topElev)
-                {
-                    double t = (topElev - start.Z) / (end.Z - start.Z);
-                    newStart = start + (end - start) * t;
-                }
-
-                if (end.Z < bottomElev)
-                {
-                    double t = (bottomElev - start.Z) / (end.Z - start.Z);
-                    newEnd = start + (end - start) * t;
-                }
-                else if (end.Z > topElev)
-                {
-                    double t = (topElev - start.Z) / (end.Z - start.Z);
-                    newEnd = start + (end - start) * t;
-                }
-
-                if (curve is Line)
-                {
-                    return Line.CreateBound(newStart, newEnd);
-                }
-                else if (curve is Arc)
-                {
-                    // For arcs, create a line approximation when clipped
-                    return Line.CreateBound(newStart, newEnd);
-                }
-            }
-            catch
-            {
-                // Return null if clipping fails
-            }
-
-            return null;
         }
 
         private void HandleHostedElements(Document doc, Wall originalWall, List<Wall> newWalls, List<Level> levels)
