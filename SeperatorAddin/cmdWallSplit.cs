@@ -746,8 +746,12 @@ namespace SeperatorAddin
 
         private Wall FindAppropriateHost(List<Wall> walls, double elevation)
         {
-            foreach (Wall wall in walls)
+            // A small tolerance is used to handle floating-point inaccuracies
+            const double tolerance = 0.001;
+
+            for (int i = 0; i < walls.Count; i++)
             {
+                Wall wall = walls[i];
                 try
                 {
                     Level baseLevel = wall.Document.GetElement(wall.LevelId) as Level;
@@ -770,13 +774,27 @@ namespace SeperatorAddin
                         topElevation = baseElevation + height;
                     }
 
-                    if (elevation >= baseElevation && elevation <= topElevation)
+                    // For the last wall segment, the top boundary is inclusive.
+                    if (i == walls.Count - 1)
                     {
-                        return wall;
+                        if (elevation >= baseElevation - tolerance && elevation <= topElevation + tolerance)
+                        {
+                            return wall;
+                        }
+                    }
+                    // For all other segments, the top boundary is exclusive.
+                    // This ensures an element on a boundary is hosted by the wall segment ABOVE it.
+                    else
+                    {
+                        if (elevation >= baseElevation - tolerance && elevation < topElevation - tolerance)
+                        {
+                            return wall;
+                        }
                     }
                 }
                 catch
                 {
+                    // If parameters can't be read for a segment, skip to the next one.
                     continue;
                 }
             }
