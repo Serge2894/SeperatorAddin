@@ -640,9 +640,13 @@ namespace SeperatorAddin
                 XYZ openingStart = projectedCenter - wallDirection * (openingWidth / 2);
                 XYZ openingEnd = projectedCenter + wallDirection * (openingWidth / 2);
 
-                // Create points for rectangular opening
-                XYZ point1 = new XYZ(openingStart.X, openingStart.Y, openingBottom);
-                XYZ point2 = new XYZ(openingEnd.X, openingEnd.Y, openingTop);
+                // *** FIX: Calculate offsets relative to the new wall's base elevation ***
+                double bottomOffset = openingBottom - wallBottomElev;
+                double topOffset = openingTop - wallBottomElev;
+
+                // Create points for rectangular opening using the relative offsets for Z
+                XYZ point1 = new XYZ(openingStart.X, openingStart.Y, bottomOffset);
+                XYZ point2 = new XYZ(openingEnd.X, openingEnd.Y, topOffset);
 
                 // Create the opening using the correct method
                 doc.Create.NewOpening(wall, point1, point2);
