@@ -37,6 +37,24 @@
 	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
   </AddIn>
   <AddIn Type="Command">
+	  <Text>SeperatorAddin - cmdCableTraySplitter</Text>
+	  <Description>Some description</Description>
+	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
+	  <FullClassName>SeperatorAddin.cmdCableTraySplitter</FullClassName>
+	  <ClientId>7E2EDFB9-E639-414E-9F19-4288A1600445</ClientId>
+	  <VendorId>com.YOUR COMPANY NAME</VendorId>
+	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
+	  <Text>SeperatorAddin - cmdConduitsSplitter</Text>
+	  <Description>Some description</Description>
+	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
+	  <FullClassName>SeperatorAddin.cmdConduitsSplitter</FullClassName>
+	  <ClientId>3FCB3B4A-8AFA-4618-84CB-B445E8E4AC8F</ClientId>
+	  <VendorId>com.YOUR COMPANY NAME</VendorId>
+	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
 	  <Text>SeperatorAddin - cmdDuctSplitter</Text>
 	  <Description>Some description</Description>
 	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
