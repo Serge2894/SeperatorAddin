@@ -55,6 +55,15 @@
 	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
   </AddIn>
   <AddIn Type="Command">
+	  <Text>SeperatorAddin - cmdFloorSeperator</Text>
+	  <Description>Some description</Description>
+	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
+	  <FullClassName>SeperatorAddin.cmdFloorSeperator</FullClassName>
+	  <ClientId>DC721F62-DD21-46D8-B213-9EE48BD2B509</ClientId>
+	  <VendorId>com.YOUR COMPANY NAME</VendorId>
+	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
+  </AddIn>
+  <AddIn Type="Command">
 	  <Text>SeperatorAddin - cmdDuctSplitter</Text>
 	  <Description>Some description</Description>
 	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
