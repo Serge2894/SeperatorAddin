@@ -53,7 +53,7 @@ namespace SeperatorAddin
             }
         }
 
-        private void ProcessRoof(Document doc, RoofBase originalRoof)
+        public void ProcessRoof(Document doc, RoofBase originalRoof)
         {
             RoofType originalRoofType = doc.GetElement(originalRoof.GetTypeId()) as RoofType;
             CompoundStructure structure = originalRoofType?.GetCompoundStructure();

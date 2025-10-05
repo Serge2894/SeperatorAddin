@@ -1,16 +1,17 @@
 ﻿using Autodesk.Revit.DB;
 using Autodesk.Revit.UI.Selection;
 using SeperatorAddin.Common;
+using System;
 using System.Collections.Generic;
 using System.Linq;
-using static SeperatorAddin.Common.Utils;
+using System.Reflection;
 
 namespace SeperatorAddin
 {
     [Transaction(TransactionMode.Manual)]
     public class cmdWallSeperator : IExternalCommand
     {
-        // Tolerance for geometric comparisonsA
+        // Tolerance for geometric comparisons
         private const double TOLERANCE = 0.001; // 1/16" in feet
         private const double ANGLE_TOLERANCE = 0.01; // Radians
         private const double MAX_EXTENSION = 5.0; // Maximum extension distance in feet
@@ -27,49 +28,20 @@ namespace SeperatorAddin
                 Utils.WallSelectionilter filter = new Utils.WallSelectionilter();
                 List<Reference> references = uidoc.Selection.PickObjects(ObjectType.Element, filter).ToList();
 
-                List<Wall> selectedWalls = new List<Wall>();
-                foreach (Reference reference in references)
-                {
-                    Wall wall = doc.GetElement(reference.ElementId) as Wall;
-                    selectedWalls.Add(wall);
-                }
-
-                // Store connection information before processing
-                Dictionary<ElementId, WallConnectionInfo> wallConnections = AnalyzeAllConnections(doc, selectedWalls);
-
-                // Store the new walls created from each original wall
-                Dictionary<ElementId, List<Wall>> originalToNewWalls = new Dictionary<ElementId, List<Wall>>();
-
                 using (Transaction t = new Transaction(doc, "Split and Join Walls"))
                 {
                     t.Start();
 
-                    // Unjoin all selected walls from each other
-                    UnjoinAllWalls(doc, selectedWalls);
-
-                    // Process each wall and create separated layers
-                    foreach (Wall wall in selectedWalls)
-                    {
-                        List<Wall> newWalls = ProcessWall(doc, wall, wallConnections[wall.Id]);
-                        if (newWalls.Count > 0)
-                        {
-                            originalToNewWalls[wall.Id] = newWalls;
-                        }
-                    }
-
-                    // Delete original walls
-                    foreach (Wall wall in selectedWalls)
-                    {
-                        doc.Delete(wall.Id);
-                    }
-
-                    // Handle connections based on angle type with improved logic
-                    HandleAllConnectionsImproved(doc, originalToNewWalls, wallConnections);
+                    ProcessWallSeparation(doc, references);
 
                     t.Commit();
                 }
 
                 return Result.Succeeded;
+            }
+            catch (Autodesk.Revit.Exceptions.OperationCanceledException)
+            {
+                return Result.Cancelled;
             }
             catch (Exception ex)
             {
@@ -77,6 +49,43 @@ namespace SeperatorAddin
                 return Result.Failed;
             }
         }
+
+        public void ProcessWallSeparation(Document doc, List<Reference> references)
+        {
+            if (references == null || !references.Any()) return;
+
+            List<Wall> selectedWalls = references.Select(r => doc.GetElement(r)).OfType<Wall>().ToList();
+            if (!selectedWalls.Any()) return;
+
+            // Store connection information before processing
+            Dictionary<ElementId, WallConnectionInfo> wallConnections = AnalyzeAllConnections(doc, selectedWalls);
+
+            // Store the new walls created from each original wall
+            Dictionary<ElementId, List<Wall>> originalToNewWalls = new Dictionary<ElementId, List<Wall>>();
+
+            // Unjoin all selected walls from each other
+            UnjoinAllWalls(doc, selectedWalls);
+
+            // Process each wall and create separated layers
+            foreach (Wall wall in selectedWalls)
+            {
+                List<Wall> newWalls = ProcessWall(doc, wall, wallConnections[wall.Id]);
+                if (newWalls.Count > 0)
+                {
+                    originalToNewWalls[wall.Id] = newWalls;
+                }
+            }
+
+            // Delete original walls
+            foreach (Wall wall in selectedWalls)
+            {
+                doc.Delete(wall.Id);
+            }
+
+            // Handle connections based on angle type with improved logic
+            HandleAllConnectionsImproved(doc, originalToNewWalls, wallConnections);
+        }
+
 
         #region Helper Classes
 

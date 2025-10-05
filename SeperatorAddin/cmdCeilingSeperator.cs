@@ -53,7 +53,7 @@ namespace SeperatorAddin
             }
         }
 
-        private void ProcessCeiling(Document doc, Ceiling originalCeiling)
+        public void ProcessCeiling(Document doc, Ceiling originalCeiling)
         {
             CeilingType originalCeilingType = doc.GetElement(originalCeiling.GetTypeId()) as CeilingType;
             CompoundStructure structure = originalCeilingType.GetCompoundStructure();

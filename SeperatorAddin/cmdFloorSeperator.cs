@@ -54,7 +54,7 @@ namespace SeperatorAddin
             }
         }
 
-        private void ProcessFloor(Document doc, Floor originalFloor)
+        public void ProcessFloor(Document doc, Floor originalFloor)
         {
             FloorType originalFloorType = originalFloor.FloorType;
             CompoundStructure structure = originalFloorType.GetCompoundStructure();

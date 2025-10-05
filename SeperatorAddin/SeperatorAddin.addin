@@ -1,15 +1,6 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <RevitAddIns>
   <AddIn Type="Command">
-    <Text>SeperatorAddin - cmdWallSeperator</Text>
-    <Description>Some description</Description>
-    <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
-    <FullClassName>SeperatorAddin.cmdWallSeperator</FullClassName>
-    <ClientId>35F399F2-81FA-401F-BD75-11F3C60D0D41</ClientId>
-    <VendorId>com.YOUR COMPANY NAME</VendorId>
-    <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
-  </AddIn>
-  <AddIn Type="Command">
 	  <Text>SeperatorAddin - cmdSplitTool</Text>
 	  <Description>Some description</Description>
 	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
@@ -51,33 +42,6 @@
 	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
 	  <FullClassName>SeperatorAddin.cmdConduitsSplitter</FullClassName>
 	  <ClientId>3FCB3B4A-8AFA-4618-84CB-B445E8E4AC8F</ClientId>
-	  <VendorId>com.YOUR COMPANY NAME</VendorId>
-	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
-  </AddIn>
-  <AddIn Type="Command">
-	  <Text>SeperatorAddin - cmdFloorSeperator</Text>
-	  <Description>Some description</Description>
-	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
-	  <FullClassName>SeperatorAddin.cmdFloorSeperator</FullClassName>
-	  <ClientId>DC721F62-DD21-46D8-B213-9EE48BD2B509</ClientId>
-	  <VendorId>com.YOUR COMPANY NAME</VendorId>
-	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
-  </AddIn>
-  <AddIn Type="Command">
-	  <Text>SeperatorAddin - cmdCeilingSeperator</Text>
-	  <Description>Some description</Description>
-	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
-	  <FullClassName>SeperatorAddin.cmdCeilingSeperator</FullClassName>
-	  <ClientId>2EFD7820-1EA7-4091-9D33-6C56CCABFC8B</ClientId>
-	  <VendorId>com.YOUR COMPANY NAME</VendorId>
-	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
-  </AddIn>
-  <AddIn Type="Command">
-	  <Text>SeperatorAddin - cmdRoofSeperator</Text>
-	  <Description>Some description</Description>
-	  <Assembly>SeperatorAddin\SeperatorAddin.dll</Assembly>
-	  <FullClassName>SeperatorAddin.cmdRoofSeperator</FullClassName>
-	  <ClientId>CE9B3644-AB4E-455B-833B-9EE1305AE736</ClientId>
 	  <VendorId>com.YOUR COMPANY NAME</VendorId>
 	  <VendorDescription>YOUR COMPANY NAME, YOUR COMPANY URL</VendorDescription>
   </AddIn>
