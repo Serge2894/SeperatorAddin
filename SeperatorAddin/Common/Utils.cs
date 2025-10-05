@@ -55,6 +55,47 @@ namespace SeperatorAddin.Common
             public bool AllowElement(Element elem) => elem is Wall;
             public bool AllowReference(Reference reference, XYZ position) => false;
         }
+        // Filter for selecting multi -layer ceilings
+        internal class CeilingSelectionFilter : ISelectionFilter
+        {
+            public bool AllowElement(Element elem)
+            {
+                if (elem is Ceiling ceiling)
+                {
+                    CeilingType ceilingType = elem.Document.GetElement(ceiling.GetTypeId()) as CeilingType;
+                    if (ceilingType?.GetCompoundStructure() == null || ceilingType.GetCompoundStructure().LayerCount <= 1)
+                    {
+                        return false; // Exclude single-layer or invalid ceilings
+                    }
+                    return true;
+                }
+                return false;
+            }
+            public bool AllowReference(Reference reference, XYZ position) => false;
+        }
+        // Filter for selecting multi -layer roofs
+        internal class RoofSelectionFilter : ISelectionFilter
+        {
+            public bool AllowElement(Element elem)
+            {
+                if (elem is RoofBase roof)
+                {
+                    RoofType roofType = elem.Document.GetElement(roof.GetTypeId()) as RoofType;
+                    // Ensure it's a flat roof and has multiple layers
+                    bool isSloped = roof.get_Parameter(BuiltInParameter.ROOF_SLOPE)?.AsDouble() > 0;
+                    if (isSloped) return false;
+
+                    if (roofType?.GetCompoundStructure() == null || roofType.GetCompoundStructure().LayerCount <= 1)
+                    {
+                        return false;
+                    }
+                    return true;
+                }
+                return false;
+            }
+
+            public bool AllowReference(Reference reference, XYZ position) => false;
+        }
 
         // Filter for selecting model curves
         internal class ModelCurveSelectionFilter : ISelectionFilter

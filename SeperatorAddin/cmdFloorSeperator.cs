@@ -61,14 +61,12 @@ namespace SeperatorAddin
 
             if (structure == null || structure.LayerCount <= 1)
             {
-                // Not a compound floor or has only one layer, so skip it.
                 return;
             }
 
             Level level = doc.GetElement(originalFloor.LevelId) as Level;
             double heightOffset = originalFloor.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM).AsDouble();
 
-            // Get the boundary of the floor
             CurveLoop floorBoundary = null;
             Solid floorSolid = GetFloorSolid(originalFloor);
             if (floorSolid != null)
@@ -76,49 +74,131 @@ namespace SeperatorAddin
                 PlanarFace topFace = GetTopFace(floorSolid);
                 if (topFace != null)
                 {
-                    // Assuming the first loop is the exterior boundary
                     floorBoundary = topFace.GetEdgesAsCurveLoops().FirstOrDefault();
                 }
             }
 
             if (floorBoundary == null)
             {
-                // Could not determine floor boundary, skip this floor
                 return;
             }
 
-
             double currentOffset = 0.0;
+            int successfulLayers = 0;
 
-            // We iterate from top to bottom
             for (int i = 0; i < structure.LayerCount; i++)
             {
                 CompoundStructureLayer layer = structure.GetLayers()[i];
                 double layerThickness = layer.Width;
 
-                // Create a new floor type for this layer
                 FloorType newFloorType = GetOrCreateFloorType(doc, originalFloorType, layer, i);
 
-                // The first new floor is created at the original offset.
-                // Subsequent floors are offset by the thickness of the layers above them.
+                if (newFloorType == null)
+                {
+                    string matName = doc.GetElement(layer.MaterialId)?.Name ?? "Unnamed";
+                    System.Diagnostics.Debug.Print($"Skipping layer {i + 1} ('{matName}') because it has properties (e.g., Variable Thickness) that prevent it from being a single-layer floor.");
+                    currentOffset += layerThickness;
+                    continue;
+                }
+
                 double newFloorOffset = heightOffset - currentOffset;
 
-                // Create the new floor
                 Floor newFloor = Floor.Create(doc, new List<CurveLoop> { floorBoundary }, newFloorType.Id, level.Id);
 
-                // Set the height offset for the new floor
                 Parameter heightParam = newFloor.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM);
                 if (heightParam != null && !heightParam.IsReadOnly)
                 {
                     heightParam.Set(newFloorOffset);
                 }
 
+                // --- NEW CODE: Copy parameters from the original floor to the new one ---
+                CopyFloorParameters(originalFloor, newFloor);
+
+                successfulLayers++;
                 currentOffset += layerThickness;
             }
 
-            // After creating all the new floors, delete the original one
-            doc.Delete(originalFloor.Id);
+            if (successfulLayers > 0)
+            {
+                doc.Delete(originalFloor.Id);
+            }
         }
+
+        /// <summary>
+        /// Copies instance parameters from a source element to a target element.
+        /// </summary>
+        /// <param name="source">The element to copy parameters from.</param>
+        /// <param name="target">The element to copy parameters to.</param>
+        private void CopyFloorParameters(Element source, Element target)
+        {
+            // List of parameters to explicitly ignore
+            var ignoredParams = new List<BuiltInParameter>
+    {
+        // --- ADDED THIS LINE ---
+        BuiltInParameter.ALL_MODEL_MARK, // This is the "Mark" parameter
+
+        // Parameters related to type, which we are intentionally changing
+        BuiltInParameter.ELEM_FAMILY_AND_TYPE_PARAM,
+        BuiltInParameter.ELEM_FAMILY_PARAM,
+        BuiltInParameter.ELEM_TYPE_PARAM,
+
+        // Geometric/Host parameters that are set uniquely for each new floor
+        BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM,
+        BuiltInParameter.HOST_AREA_COMPUTED,
+        BuiltInParameter.HOST_VOLUME_COMPUTED,
+        BuiltInParameter.FLOOR_ATTR_THICKNESS_PARAM,
+        
+        // Read-only identifiers
+        BuiltInParameter.ID_PARAM
+    };
+
+            foreach (Parameter sourceParam in source.Parameters)
+            {
+                // Skip read-only parameters
+                if (sourceParam.IsReadOnly) continue;
+
+                // Check if the parameter is in the ignored list by its BuiltInParameter enum
+                if (sourceParam.Definition is InternalDefinition internalDef)
+                {
+                    if (ignoredParams.Contains(internalDef.BuiltInParameter))
+                    {
+                        continue;
+                    }
+                }
+
+                Parameter targetParam = target.get_Parameter(sourceParam.Definition);
+
+                // If the target has the same parameter and it's not read-only, copy the value
+                if (targetParam != null && !targetParam.IsReadOnly)
+                {
+                    try
+                    {
+                        switch (sourceParam.StorageType)
+                        {
+                            case StorageType.Double:
+                                targetParam.Set(sourceParam.AsDouble());
+                                break;
+                            case StorageType.Integer:
+                                targetParam.Set(sourceParam.AsInteger());
+                                break;
+                            case StorageType.String:
+                                targetParam.Set(sourceParam.AsString());
+                                break;
+                            case StorageType.ElementId:
+                                targetParam.Set(sourceParam.AsElementId());
+                                break;
+                        }
+                    }
+                    catch
+                    {
+                        // Fails silently if a specific parameter can't be set
+                    }
+                }
+            }
+        }
+
+
+        // (The rest of the methods: GetFloorSolid, GetTopFace, GetOrCreateFloorType, GetButtonData remain the same)
 
         private Solid GetFloorSolid(Floor floor)
         {
@@ -157,6 +237,11 @@ namespace SeperatorAddin
 
         private FloorType GetOrCreateFloorType(Document doc, FloorType originalFloorType, CompoundStructureLayer layer, int layerIndex)
         {
+            if (originalFloorType.GetCompoundStructure().VariableLayerIndex == layerIndex)
+            {
+                return null;
+            }
+
             string materialName = "Unnamed";
             if (layer.MaterialId != ElementId.InvalidElementId)
             {
@@ -169,19 +254,29 @@ namespace SeperatorAddin
 
             string newTypeName = $"{originalFloorType.Name}_Layer_{layerIndex + 1}_{materialName}";
 
-            // Check if this floor type already exists
             FilteredElementCollector collector = new FilteredElementCollector(doc);
             collector.OfClass(typeof(FloorType));
             FloorType newFloorType = collector.FirstOrDefault(e => e.Name == newTypeName) as FloorType;
 
             if (newFloorType == null)
             {
-                // It doesn't exist, so create it
-                newFloorType = originalFloorType.Duplicate(newTypeName) as FloorType;
+                try
+                {
+                    newFloorType = originalFloorType.Duplicate(newTypeName) as FloorType;
+                    CompoundStructure cs = newFloorType.GetCompoundStructure();
 
-                // Create a new compound structure with just this one layer
-                CompoundStructure newStructure = CompoundStructure.CreateSimpleCompoundStructure(new List<CompoundStructureLayer> { layer });
-                newFloorType.SetCompoundStructure(newStructure);
+                    cs.SetLayers(new List<CompoundStructureLayer> { layer });
+                    cs.SetNumberOfShellLayers(ShellLayerType.Exterior, 0);
+                    cs.SetNumberOfShellLayers(ShellLayerType.Interior, 0);
+                    cs.EndCap = EndCapCondition.NoEndCap;
+                    cs.OpeningWrapping = OpeningWrappingCondition.None;
+
+                    newFloorType.SetCompoundStructure(cs);
+                }
+                catch (Exception)
+                {
+                    return null;
+                }
             }
 
             return newFloorType;
