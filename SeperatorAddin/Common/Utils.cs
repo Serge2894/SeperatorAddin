@@ -1,4 +1,8 @@
-﻿using Autodesk.Revit.UI.Selection;
+﻿using Autodesk.Revit.DB;
+using Autodesk.Revit.DB.Mechanical;
+using Autodesk.Revit.DB.Plumbing;
+using Autodesk.Revit.UI;
+using Autodesk.Revit.UI.Selection;
 using System.Collections.Generic;
 
 namespace SeperatorAddin.Common
@@ -104,6 +108,48 @@ namespace SeperatorAddin.Common
             public bool AllowReference(Reference reference, XYZ position) => false;
         }
 
+        // ADDED FILTERS START HERE
+
+        // Filter for selecting columns (Architectural and Structural)
+        public class ColumnSelectionFilter : ISelectionFilter
+        {
+            public bool AllowElement(Element elem)
+            {
+                if (elem.Category != null)
+                {
+                    var catId = elem.Category.Id.IntegerValue;
+                    return catId == (int)BuiltInCategory.OST_Columns ||
+                           catId == (int)BuiltInCategory.OST_StructuralColumns;
+                }
+                return false;
+            }
+
+            public bool AllowReference(Reference reference, XYZ position) => false;
+        }
+
+        // Filter for selecting Ducts
+        public class DuctSelectionFilter : ISelectionFilter
+        {
+            public bool AllowElement(Element elem)
+            {
+                return elem is Duct;
+            }
+
+            public bool AllowReference(Reference reference, XYZ position) => false;
+        }
+
+        // Filter for selecting Pipes
+        public class PipeSelectionFilter : ISelectionFilter
+        {
+            public bool AllowElement(Element elem)
+            {
+                return elem is Pipe;
+            }
+
+            public bool AllowReference(Reference reference, XYZ position) => false;
+        }
+
+        // ADDED FILTERS END HERE
 
         // Method to get all parameters from an element
         public static List<Parameter> GetAllParametersFromElement(Element element)

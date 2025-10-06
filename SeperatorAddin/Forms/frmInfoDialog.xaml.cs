@@ -3,26 +3,21 @@ using System.Windows.Input;
 
 namespace SeperatorAddin.Forms
 {
-    /// <summary>
-    /// Interaction logic for frmSuccessDialog.xaml
-    /// </summary>
-    public partial class frmSuccessDialog : Window
+    public partial class frmInfoDialog : Window
     {
-        /// <summary>
-        /// Default constructor.
-        /// </summary>
-        public frmSuccessDialog()
+        public frmInfoDialog()
         {
             InitializeComponent();
         }
 
-        /// <summary>
-        /// Constructor that accepts a custom message.
-        /// </summary>
-        /// <param name="message">The message to display in the dialog.</param>
-        public frmSuccessDialog(string message) : this()
+        public frmInfoDialog(string message) : this(message, "Operation Complete")
+        {
+        }
+
+        public frmInfoDialog(string message, string title) : this()
         {
             txtSuccessMessage.Text = message;
+            TitleText.Text = $"STools - {title}";
         }
 
         private void btnClose_Click(object sender, RoutedEventArgs e)
@@ -35,7 +30,6 @@ namespace SeperatorAddin.Forms
             this.Close();
         }
 
-        // Allows the window to be dragged by clicking and holding the title bar.
         private void Border_MouseDown(object sender, MouseButtonEventArgs e)
         {
             if (e.LeftButton == MouseButtonState.Pressed)

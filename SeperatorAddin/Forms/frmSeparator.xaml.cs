@@ -41,7 +41,6 @@ namespace SeperatorAddin.Forms
             this.Close();
         }
 
-        // Add this method
         private void btnCancel_Click(object sender, RoutedEventArgs e)
         {
             this.DialogResult = false;
@@ -110,10 +109,18 @@ namespace SeperatorAddin.Forms
 
         private void Separate_Click(object sender, RoutedEventArgs e)
         {
+            // ADDED: Check if any elements have been selected
+            if (!_floorRefs.Any() && !_roofRefs.Any() && !_wallRefs.Any() && !_ceilingRefs.Any())
+            {
+                var warningDialog = new frmInfoDialog("Please select elements from at least one category to separate.", "Selection Required");
+                warningDialog.ShowDialog();
+                return; // Stop execution
+            }
+
             // Pass the selected element references to the handler
             _handler.SetData(_floorRefs, _roofRefs, _wallRefs, _ceilingRefs);
 
-            // Raise the external event to run the separation logic in a valid Revit context
+            // Raise the external event to run the separation logic
             _externalEvent.Raise();
 
             this.Close();

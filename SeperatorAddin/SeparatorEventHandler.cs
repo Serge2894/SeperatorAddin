@@ -13,9 +13,6 @@ namespace SeperatorAddin
         private List<Reference> _wallRefs = new List<Reference>();
         private List<Reference> _ceilingRefs = new List<Reference>();
 
-        /// <summary>
-        /// Sets the data (selected element references) for the handler to process.
-        /// </summary>
         public void SetData(List<Reference> floors, List<Reference> roofs, List<Reference> walls, List<Reference> ceilings)
         {
             _floorRefs = floors ?? new List<Reference>();
@@ -24,25 +21,17 @@ namespace SeperatorAddin
             _ceilingRefs = ceilings ?? new List<Reference>();
         }
 
-        /// <summary>
-        /// This method is executed by Revit in a valid API context when the ExternalEvent is raised.
-        /// </summary>
         public void Execute(UIApplication app)
         {
             UIDocument uidoc = app.ActiveUIDocument;
             Document doc = uidoc.Document;
 
-            if (!_floorRefs.Any() && !_roofRefs.Any() && !_wallRefs.Any() && !_ceilingRefs.Any())
-            {
-                TaskDialog.Show("Separator", "No elements were selected for separation.");
-                return;
-            }
+            // REMOVED: Redundant check, as it's now handled in the form.
 
             using (Transaction t = new Transaction(doc, "Separate Element Layers"))
             {
                 t.Start();
 
-                // Process Floors if any were selected
                 if (_floorRefs.Any())
                 {
                     var processor = new cmdFloorSeperator();
@@ -55,7 +44,6 @@ namespace SeperatorAddin
                     }
                 }
 
-                // Process Roofs if any were selected
                 if (_roofRefs.Any())
                 {
                     var processor = new cmdRoofSeperator();
@@ -68,14 +56,12 @@ namespace SeperatorAddin
                     }
                 }
 
-                // Process Walls if any were selected
                 if (_wallRefs.Any())
                 {
                     var processor = new cmdWallSeperator();
                     processor.ProcessWallSeparation(doc, _wallRefs);
                 }
 
-                // Process Ceilings if any were selected
                 if (_ceilingRefs.Any())
                 {
                     var processor = new cmdCeilingSeperator();
@@ -91,8 +77,7 @@ namespace SeperatorAddin
                 t.Commit();
             }
 
-            // Show the success dialog after the transaction is complete
-            var successDialog = new frmSuccessDialog("Elements modified successfully.");
+            var successDialog = new frmInfoDialog("Elements separated successfully.", "Separator");
             successDialog.ShowDialog();
         }
 
