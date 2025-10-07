@@ -18,113 +18,136 @@ namespace SeperatorAddin
             return Result.Succeeded;
         }
 
-        private bool SplitColumn(Document doc, Element column, List<Level> levels)
+        /// <summary>
+        /// Splits a vertical column (both architectural and structural) at each of the specified levels.
+        /// </summary>
+        public bool SplitColumn(Document doc, Element column, List<Level> levels)
         {
-            // Get column location
-            LocationPoint locPoint = column.Location as LocationPoint;
-            if (locPoint == null)
+            var familyInstance = column as FamilyInstance;
+            if (familyInstance == null) return false;
+
+            var locPoint = column.Location as LocationPoint;
+            if (locPoint == null) return false;
+
+            // Get the correct parameters for the column, whether it's architectural or structural
+            var columnParameters = GetColumnParameters(column);
+            if (columnParameters == null) return false; // Column type not supported
+
+            var baseLevel = doc.GetElement(columnParameters.BaseLevelParam.AsElementId()) as Level;
+            var topLevel = doc.GetElement(columnParameters.TopLevelParam.AsElementId()) as Level;
+            if (baseLevel == null || topLevel == null) return false;
+
+            double baseElevation = baseLevel.ProjectElevation + columnParameters.BaseOffsetParam.AsDouble();
+            double topElevation = topLevel.ProjectElevation + columnParameters.TopOffsetParam.AsDouble();
+
+            // Create a sorted list of elevations to split at
+            var splitElevations = new List<double> { baseElevation };
+            foreach (var level in levels)
             {
-                throw new InvalidOperationException("Column does not have a valid location point.");
+                if (level.ProjectElevation > baseElevation + 0.001 && level.ProjectElevation < topElevation - 0.001)
+                {
+                    splitElevations.Add(level.ProjectElevation);
+                }
             }
+            splitElevations.Add(topElevation);
+            var distinctElevations = splitElevations.Distinct().OrderBy(e => e).ToList();
 
-            XYZ basePoint = locPoint.Point;
+            if (distinctElevations.Count < 2) return false;
 
-            // Get current column parameters
-            Parameter baseOffsetParam = column.get_Parameter(BuiltInParameter.FAMILY_BASE_LEVEL_OFFSET_PARAM);
-            Parameter topOffsetParam = column.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_OFFSET_PARAM);
-
-            double baseOffset = baseOffsetParam?.AsDouble() ?? 0;
-            double topOffset = topOffsetParam?.AsDouble() ?? 0;
-
-            // Get column's base and top levels
-            Level baseLevel = doc.GetElement(column.get_Parameter(BuiltInParameter.FAMILY_BASE_LEVEL_PARAM).AsElementId()) as Level;
-            Level topLevel = doc.GetElement(column.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_PARAM).AsElementId()) as Level;
-
-            if (baseLevel == null || topLevel == null)
-            {
-                throw new InvalidOperationException("Cannot determine column's base or top level.");
-            }
-
-            // Calculate actual base and top elevations
-            double baseElevation = baseLevel.Elevation + baseOffset;
-            double topElevation = topLevel.Elevation + topOffset;
-
-            // Filter levels that are within the column's height range
-            List<Level> relevantLevels = levels
-                .Where(l => l.Elevation > baseElevation && l.Elevation < topElevation)
-                .ToList();
-
-            if (relevantLevels.Count == 0)
-            {
-                // No levels intersect the column, no need to split
-                return true;
-            }
-
-            // Add the base and top levels to create complete segments
-            List<Level> allLevels = new List<Level> { baseLevel };
-            allLevels.AddRange(relevantLevels);
-            allLevels.Add(topLevel);
-            allLevels = allLevels.OrderBy(l => l.Elevation).ToList();
-
-            // Store original column ID for deletion
-            ElementId originalColumnId = column.Id;
+            var newColumns = new List<FamilyInstance>();
+            var allLevels = levels.Concat(new[] { baseLevel, topLevel }).Distinct().ToList();
 
             // Create new column segments
-            List<ElementId> newColumnIds = new List<ElementId>();
-            for (int i = 0; i < allLevels.Count - 1; i++)
+            for (int i = 0; i < distinctElevations.Count - 1; i++)
             {
-                Level currentLevel = allLevels[i];
-                Level nextLevel = allLevels[i + 1];
+                double bottomElev = distinctElevations[i];
+                double topElev = distinctElevations[i + 1];
 
-                // Copy the column
-                ICollection<ElementId> copiedIds = ElementTransformUtils.CopyElement(
-                    doc,
-                    originalColumnId,
-                    XYZ.Zero); // Copy at same location
+                Level newBaseLevel = GetBestHostLevel(allLevels, bottomElev);
+                Level newTopLevel = GetBestHostLevel(allLevels, topElev);
+                if (newBaseLevel == null || newTopLevel == null) continue;
 
-                if (copiedIds.Count > 0)
+                double newBaseOffset = bottomElev - newBaseLevel.ProjectElevation;
+                double newTopOffset = topElev - newTopLevel.ProjectElevation;
+
+                var newColumn = doc.Create.NewFamilyInstance(locPoint.Point, familyInstance.Symbol, newBaseLevel, familyInstance.StructuralType) as FamilyInstance;
+
+                if (newColumn != null)
                 {
-                    ElementId newColumnId = copiedIds.First();
-                    Element newColumn = doc.GetElement(newColumnId);
-
-                    // Set base level and offset
-                    newColumn.get_Parameter(BuiltInParameter.FAMILY_BASE_LEVEL_PARAM).Set(currentLevel.Id);
-                    if (i == 0 && currentLevel == baseLevel)
-                    {
-                        // First segment: maintain original base offset
-                        newColumn.get_Parameter(BuiltInParameter.FAMILY_BASE_LEVEL_OFFSET_PARAM).Set(baseOffset);
-                    }
-                    else
-                    {
-                        // Other segments: no base offset
-                        newColumn.get_Parameter(BuiltInParameter.FAMILY_BASE_LEVEL_OFFSET_PARAM).Set(0);
-                    }
-
-                    // Set top level and offset
-                    newColumn.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_PARAM).Set(nextLevel.Id);
-                    if (i == allLevels.Count - 2 && nextLevel == topLevel)
-                    {
-                        // Last segment: maintain original top offset
-                        newColumn.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_OFFSET_PARAM).Set(topOffset);
-                    }
-                    else
-                    {
-                        // Other segments: no top offset
-                        newColumn.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_OFFSET_PARAM).Set(0);
-                    }
-
-                    newColumnIds.Add(newColumnId);
+                    // Use the same parameter definitions we found earlier to set the new values
+                    newColumn.get_Parameter(columnParameters.TopLevelParam.Definition)?.Set(newTopLevel.Id);
+                    newColumn.get_Parameter(columnParameters.BaseOffsetParam.Definition)?.Set(newBaseOffset);
+                    newColumn.get_Parameter(columnParameters.TopOffsetParam.Definition)?.Set(newTopOffset);
+                    newColumns.Add(newColumn);
                 }
             }
 
-            // Delete the original column only if we successfully created segments
-            if (newColumnIds.Count > 0)
+            if (newColumns.Any())
             {
-                doc.Delete(originalColumnId);
+                doc.Delete(column.Id);
                 return true;
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// A helper class to hold the correct parameters for a column.
+        /// </summary>
+        private class ColumnParameterSet
+        {
+            public Parameter BaseLevelParam { get; set; }
+            public Parameter TopLevelParam { get; set; }
+            public Parameter BaseOffsetParam { get; set; }
+            public Parameter TopOffsetParam { get; set; }
+        }
+
+        /// <summary>
+        /// Finds the correct geometry-driving parameters for either an architectural or structural column.
+        /// </summary>
+        private ColumnParameterSet GetColumnParameters(Element column)
+        {
+            // First, try the parameters typically used by Structural Columns
+            var structuralParams = new ColumnParameterSet
+            {
+                BaseLevelParam = column.get_Parameter(BuiltInParameter.SCHEDULE_BASE_LEVEL_PARAM),
+                TopLevelParam = column.get_Parameter(BuiltInParameter.SCHEDULE_TOP_LEVEL_PARAM),
+                BaseOffsetParam = column.get_Parameter(BuiltInParameter.SCHEDULE_BASE_LEVEL_OFFSET_PARAM),
+                TopOffsetParam = column.get_Parameter(BuiltInParameter.SCHEDULE_TOP_LEVEL_OFFSET_PARAM)
+            };
+
+            if (structuralParams.BaseLevelParam != null && structuralParams.TopLevelParam != null && structuralParams.BaseOffsetParam != null && structuralParams.TopOffsetParam != null)
+            {
+                return structuralParams;
+            }
+
+            // If that fails, try the parameters for Architectural Columns
+            var architecturalParams = new ColumnParameterSet
+            {
+                BaseLevelParam = column.get_Parameter(BuiltInParameter.FAMILY_BASE_LEVEL_PARAM),
+                TopLevelParam = column.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_PARAM),
+                BaseOffsetParam = column.get_Parameter(BuiltInParameter.FAMILY_BASE_LEVEL_OFFSET_PARAM),
+                TopOffsetParam = column.get_Parameter(BuiltInParameter.FAMILY_TOP_LEVEL_OFFSET_PARAM)
+            };
+
+            if (architecturalParams.BaseLevelParam != null && architecturalParams.TopLevelParam != null && architecturalParams.BaseOffsetParam != null && architecturalParams.TopOffsetParam != null)
+            {
+                return architecturalParams;
+            }
+
+            // If neither set of parameters is found, this column type is not supported
+            return null;
+        }
+
+        /// <summary>
+        /// Finds the highest level that is at or below the given elevation.
+        /// </summary>
+        private Level GetBestHostLevel(IEnumerable<Level> levels, double elevation)
+        {
+            return levels
+                .Where(l => l.ProjectElevation <= elevation + 0.001)
+                .OrderByDescending(l => l.ProjectElevation)
+                .FirstOrDefault();
         }
     }
 }
