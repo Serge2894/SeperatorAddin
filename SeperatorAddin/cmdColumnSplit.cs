@@ -26,9 +26,6 @@ namespace SeperatorAddin
             var familyInstance = column as FamilyInstance;
             if (familyInstance == null) return false;
 
-            var locPoint = column.Location as LocationPoint;
-            if (locPoint == null) return false;
-
             // Get the correct parameters for the column, whether it's architectural or structural
             var columnParameters = GetColumnParameters(column);
             if (columnParameters == null) return false; // Column type not supported
@@ -54,7 +51,7 @@ namespace SeperatorAddin
 
             if (distinctElevations.Count < 2) return false;
 
-            var newColumns = new List<FamilyInstance>();
+            var newColumns = new List<ElementId>();
             var allLevels = levels.Concat(new[] { baseLevel, topLevel }).Distinct().ToList();
 
             // Create new column segments
@@ -70,15 +67,22 @@ namespace SeperatorAddin
                 double newBaseOffset = bottomElev - newBaseLevel.ProjectElevation;
                 double newTopOffset = topElev - newTopLevel.ProjectElevation;
 
-                var newColumn = doc.Create.NewFamilyInstance(locPoint.Point, familyInstance.Symbol, newBaseLevel, familyInstance.StructuralType) as FamilyInstance;
+                // Copy the original column
+                ICollection<ElementId> copiedIds = ElementTransformUtils.CopyElement(doc, column.Id, XYZ.Zero);
+                if (copiedIds.Count == 0) continue;
+
+                ElementId newColumnId = copiedIds.First();
+                var newColumn = doc.GetElement(newColumnId) as FamilyInstance;
 
                 if (newColumn != null)
                 {
-                    // Use the same parameter definitions we found earlier to set the new values
+                    // Adjust the base and top levels and offsets of the copied column
+                    newColumn.get_Parameter(columnParameters.BaseLevelParam.Definition)?.Set(newBaseLevel.Id);
                     newColumn.get_Parameter(columnParameters.TopLevelParam.Definition)?.Set(newTopLevel.Id);
                     newColumn.get_Parameter(columnParameters.BaseOffsetParam.Definition)?.Set(newBaseOffset);
                     newColumn.get_Parameter(columnParameters.TopOffsetParam.Definition)?.Set(newTopOffset);
-                    newColumns.Add(newColumn);
+
+                    newColumns.Add(newColumnId);
                 }
             }
 
@@ -141,13 +145,21 @@ namespace SeperatorAddin
 
         /// <summary>
         /// Finds the highest level that is at or below the given elevation.
+        /// If no level is below, it returns the lowest level available.
         /// </summary>
         private Level GetBestHostLevel(IEnumerable<Level> levels, double elevation)
         {
-            return levels
+            var suitableLevels = levels
                 .Where(l => l.ProjectElevation <= elevation + 0.001)
-                .OrderByDescending(l => l.ProjectElevation)
-                .FirstOrDefault();
+                .OrderByDescending(l => l.ProjectElevation);
+
+            if (suitableLevels.Any())
+            {
+                return suitableLevels.First();
+            }
+
+            // Fallback: If no level is at or below the elevation, return the lowest level in the list.
+            return levels.OrderBy(l => l.ProjectElevation).FirstOrDefault();
         }
     }
 }

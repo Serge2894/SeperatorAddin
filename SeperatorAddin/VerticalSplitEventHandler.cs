@@ -35,7 +35,6 @@ namespace SeperatorAddin
             }
 
             int totalElementsProcessed = 0;
-            string resultsMessage = "Vertical Split Operation Complete:\n";
 
             using (Transaction t = new Transaction(doc, "Vertically Split Elements"))
             {
@@ -56,7 +55,6 @@ namespace SeperatorAddin
                             }
                         }
                     }
-                    if (successCount > 0) resultsMessage += $"- Split {successCount} Column(s)\n";
                     totalElementsProcessed += successCount;
                 }
 
@@ -82,7 +80,6 @@ namespace SeperatorAddin
                     {
                         doc.Delete(originalWallsToDelete);
                     }
-                    if (successCount > 0) resultsMessage += $"- Split {successCount} Wall(s)\n";
                     totalElementsProcessed += successCount;
                 }
 
@@ -101,7 +98,6 @@ namespace SeperatorAddin
                             }
                         }
                     }
-                    if (successCount > 0) resultsMessage += $"- Split {successCount} Duct(s)\n";
                     totalElementsProcessed += successCount;
                 }
 
@@ -120,7 +116,6 @@ namespace SeperatorAddin
                             }
                         }
                     }
-                    if (successCount > 0) resultsMessage += $"- Split {successCount} Pipe(s)\n";
                     totalElementsProcessed += successCount;
                 }
 
@@ -129,7 +124,7 @@ namespace SeperatorAddin
 
             if (totalElementsProcessed > 0)
             {
-                var successDialog = new frmInfoDialog(resultsMessage, "Split Results");
+                var successDialog = new frmInfoDialog("Elements were split successfully.", "Split Results");
                 successDialog.ShowDialog();
             }
         }

@@ -159,9 +159,9 @@ namespace SeperatorAddin.Forms
                 return;
             }
 
-            if (SelectedLevels.Count < 2)
+            if (!SelectedLevels.Any())
             {
-                var warningDialog = new frmInfoDialog("Please select at least 2 levels to split the elements between.", "Selection Required");
+                var warningDialog = new frmInfoDialog("Please select at least one level to split the elements.", "Selection Required");
                 warningDialog.ShowDialog();
                 return;
             }
