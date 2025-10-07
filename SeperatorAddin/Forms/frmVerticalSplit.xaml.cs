@@ -229,7 +229,7 @@ namespace SeperatorAddin.Forms
         public LevelItem(Level level)
         {
             Level = level;
-            DisplayName = $"{level.Name} (Elev: {Math.Round(level.Elevation, 3)} ft)";
+            DisplayName = $"{level.Name}";
             IsSelected = false;
         }
 
