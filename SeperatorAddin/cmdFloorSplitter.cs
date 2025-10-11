@@ -1,6 +1,5 @@
 ﻿using Autodesk.Revit.Attributes;
 using Autodesk.Revit.DB;
-using Autodesk.Revit.DB.Electrical;
 using Autodesk.Revit.UI;
 using Autodesk.Revit.UI.Selection;
 using SeperatorAddin.Common;
@@ -10,13 +9,12 @@ using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
 using System.Text;
-using static SeperatorAddin.Common.Utils;
 
 namespace SeperatorAddin
 {
     [Transaction(TransactionMode.Manual)]
     [Regeneration(RegenerationOption.Manual)]
-    public class cmdCeilingSplitter : IExternalCommand
+    public class cmdFloorSplitter : IExternalCommand
     {
         // Tolerance for geometric comparisons
         private const double TOLERANCE = 0.001; // ~1/32" in feet
@@ -30,28 +28,37 @@ namespace SeperatorAddin
 
             try
             {
-                // Select a ceiling
-                Reference ceilingRef = uiDoc.Selection.PickObject(ObjectType.Element, new CeilingSelectionFilter(), "Select a ceiling to split");
-                Ceiling selectedCeiling = doc.GetElement(ceilingRef) as Ceiling;
+                // Select a floor
+                Reference floorRef = uiDoc.Selection.PickObject(
+                    ObjectType.Element,
+                    new FloorSelectionFilter(),
+                    "Select a floor to split");
+
+                Floor selectedFloor = doc.GetElement(floorRef) as Floor;
 
                 // Select ONE model line
-                Reference lineRef = uiDoc.Selection.PickObject(ObjectType.Element, new Utils.ModelCurveSelectionFilter(), "Select ONE straight model line that crosses the ceiling");
+                Reference lineRef = uiDoc.Selection.PickObject(
+                    ObjectType.Element,
+                    new ModelCurveSelectionFilter(),
+                    "Select ONE straight model line that crosses the floor");
+
                 ModelCurve modelLine = doc.GetElement(lineRef) as ModelCurve;
 
-                using (Transaction trans = new Transaction(doc, "Split Ceiling with Openings"))
+                using (Transaction trans = new Transaction(doc, "Split Floor with Openings"))
                 {
                     trans.Start();
-                    bool success = SplitCeiling(doc, selectedCeiling, modelLine);
+                    bool success = SplitFloor(doc, selectedFloor, modelLine);
+
                     if (success)
                     {
                         trans.Commit();
-                        TaskDialog.Show("Success", "Ceiling split successfully.");
+                        TaskDialog.Show("Success", "Floor split successfully.");
                         return Result.Succeeded;
                     }
                     else
                     {
                         trans.RollBack();
-                        message = "Failed to split the ceiling.";
+                        message = "Failed to split the floor. Ensure the model line fully intersects the floor boundary at two points.";
                         return Result.Failed;
                     }
                 }
@@ -67,22 +74,23 @@ namespace SeperatorAddin
             }
         }
 
-        public bool SplitCeiling(Document doc, Ceiling selectedCeiling, ModelCurve modelLine)
+        public bool SplitFloor(Document doc, Floor selectedFloor, ModelCurve modelLine)
         {
-            if (selectedCeiling == null || modelLine == null) return false;
+            if (selectedFloor == null || modelLine == null) return false;
+
+            Line splitLine = modelLine.GeometryCurve as Line;
+            if (splitLine == null) return false;
 
             try
             {
-                Line splitLine = modelLine.GeometryCurve as Line;
-                if (splitLine == null) return false;
-
-                // Get ceiling properties
-                CeilingType ceilingType = doc.GetElement(selectedCeiling.GetTypeId()) as CeilingType;
-                Level level = doc.GetElement(selectedCeiling.LevelId) as Level;
-                double offset = selectedCeiling.get_Parameter(BuiltInParameter.CEILING_HEIGHTABOVELEVEL_PARAM).AsDouble();
+                // Get floor properties
+                FloorType floorType = selectedFloor.FloorType;
+                Level level = doc.GetElement(selectedFloor.LevelId) as Level;
+                double offset = selectedFloor.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM).AsDouble();
+                bool isStructural = selectedFloor.get_Parameter(BuiltInParameter.FLOOR_PARAM_IS_STRUCTURAL)?.AsInteger() == 1;
 
                 // Collect hosted families
-                List<FamilyInstance> hostedFamilies = GetHostedFamilies(doc, selectedCeiling);
+                List<FamilyInstance> hostedFamilies = GetHostedFamilies(doc, selectedFloor);
                 Dictionary<FamilyInstance, XYZ> familyLocations = new Dictionary<FamilyInstance, XYZ>();
                 foreach (var family in hostedFamilies)
                 {
@@ -90,44 +98,47 @@ namespace SeperatorAddin
                         familyLocations[family] = locPoint.Point;
                 }
 
-                var ceilingLoops = GetCeilingBoundaryLoops(selectedCeiling);
-                if (ceilingLoops.Item1.Count < 3) return false;
+                // Get floor boundary loops
+                var floorLoops = GetFloorBoundaryLoops(selectedFloor);
+                if (floorLoops.Item1.Count < 3) return false;
 
-                // Extend split line
+                // Extend split line to ensure intersection
                 XYZ lineDir = splitLine.Direction;
-                XYZ lineStart = splitLine.GetEndPoint(0) - lineDir * 1000;
-                XYZ lineEnd = splitLine.GetEndPoint(1) + lineDir * 1000;
-                Line extendedLine = Line.CreateBound(lineStart, lineEnd);
+                Line extendedLine = Line.CreateBound(splitLine.GetEndPoint(0) - lineDir * 1000, splitLine.GetEndPoint(1) + lineDir * 1000);
 
+                // Find intersections with outer boundary
                 List<XYZ> intersectionPoints = new List<XYZ>();
-                foreach (Curve boundaryCurve in ceilingLoops.Item1)
+                foreach (Curve boundaryCurve in floorLoops.Item1)
                 {
                     if (boundaryCurve.Intersect(extendedLine, out IntersectionResultArray results) == SetComparisonResult.Overlap)
                     {
-                        foreach (IntersectionResult result in results) intersectionPoints.Add(result.XYZPoint);
+                        foreach (IntersectionResult result in results)
+                        {
+                            intersectionPoints.Add(result.XYZPoint);
+                        }
                     }
                 }
 
                 if (intersectionPoints.Count < 2) return false;
 
-                intersectionPoints = intersectionPoints.OrderBy(p => lineStart.DistanceTo(p)).ToList();
+                intersectionPoints = intersectionPoints.OrderBy(p => extendedLine.GetEndPoint(0).DistanceTo(p)).ToList();
                 XYZ splitStart = intersectionPoints.First();
                 XYZ splitEnd = intersectionPoints.Last();
 
-                StringBuilder debugInfo = new StringBuilder();
-                var profiles = CreateSplitProfilesImproved(ceilingLoops.Item1, ceilingLoops.Item2, splitStart, splitEnd, lineDir, debugInfo);
-
+                // Create split profiles
+                var profiles = CreateSplitProfilesImproved(floorLoops.Item1, floorLoops.Item2, splitStart, splitEnd, lineDir, new StringBuilder());
                 if (profiles == null || profiles.Item1.Count == 0 || profiles.Item2.Count == 0) return false;
 
-                Ceiling ceiling1 = CreateCeilingWithOpenings(doc, profiles.Item1, profiles.Item3, ceilingType, level, offset);
-                Ceiling ceiling2 = CreateCeilingWithOpenings(doc, profiles.Item2, profiles.Item4, ceilingType, level, offset);
+                // Create new floors
+                Floor floor1 = CreateFloorWithOpenings(doc, profiles.Item1, profiles.Item3, floorType, level, offset, isStructural);
+                Floor floor2 = CreateFloorWithOpenings(doc, profiles.Item2, profiles.Item4, floorType, level, offset, isStructural);
 
-                if (ceiling1 != null && ceiling2 != null)
+                if (floor1 != null && floor2 != null)
                 {
-                    CopyParameters(selectedCeiling, ceiling1);
-                    CopyParameters(selectedCeiling, ceiling2);
-                    ReassignHostedFamilies(doc, ceiling1, ceiling2, hostedFamilies, familyLocations, splitLine, lineDir);
-                    doc.Delete(selectedCeiling.Id);
+                    CopyFloorParameters(selectedFloor, floor1);
+                    CopyFloorParameters(selectedFloor, floor2);
+                    ReassignHostedFamilies(doc, floor1, floor2, hostedFamilies, familyLocations, splitLine, lineDir);
+                    doc.Delete(selectedFloor.Id);
                     return true;
                 }
 
@@ -135,37 +146,26 @@ namespace SeperatorAddin
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Failed to split ceiling: {ex.Message}");
+                Debug.WriteLine($"Failed to split floor: {ex.Message}");
                 return false;
             }
         }
 
-        #region Profile Creation and Modification
+        #region Improved Profile Creation
 
         private Tuple<List<Curve>, List<Curve>, List<List<Curve>>, List<List<Curve>>>
-            CreateSplitProfilesImproved(
-                List<Curve> outerBoundary,
-                List<List<Curve>> innerBoundaries,
-                XYZ splitStart,
-                XYZ splitEnd,
-                XYZ splitDirection,
-                StringBuilder debugInfo)
+            CreateSplitProfilesImproved(List<Curve> outerBoundary, List<List<Curve>> innerBoundaries, XYZ splitStart, XYZ splitEnd, XYZ splitDirection, StringBuilder debugInfo)
         {
             try
             {
-                List<Curve> profile1 = new List<Curve>();
-                List<Curve> profile2 = new List<Curve>();
-                List<List<Curve>> innerLoops1 = new List<List<Curve>>();
-                List<List<Curve>> innerLoops2 = new List<List<Curve>>();
-
+                List<Curve> profile1 = new List<Curve>(), profile2 = new List<Curve>();
+                List<List<Curve>> innerLoops1 = new List<List<Curve>>(), innerLoops2 = new List<List<Curve>>();
                 Line splitLine = Line.CreateBound(splitStart, splitEnd);
                 XYZ perpendicular = XYZ.BasisZ.CrossProduct(splitDirection).Normalize();
 
                 ProcessBoundaryForSplit(outerBoundary, splitLine, perpendicular, splitStart, profile1, profile2, debugInfo);
-
                 profile1.Add(Line.CreateBound(splitStart, splitEnd));
                 profile2.Add(Line.CreateBound(splitEnd, splitStart));
-
                 profile1 = SortCurvesIntoLoop(profile1, debugInfo);
                 profile2 = SortCurvesIntoLoop(profile2, debugInfo);
 
@@ -175,12 +175,10 @@ namespace SeperatorAddin
                     if (openingResult.Item1 != null && ValidateOpeningLoop(openingResult.Item1)) innerLoops1.Add(openingResult.Item1);
                     if (openingResult.Item2 != null && ValidateOpeningLoop(openingResult.Item2)) innerLoops2.Add(openingResult.Item2);
                 }
-
-                return new Tuple<List<Curve>, List<Curve>, List<List<Curve>>, List<List<Curve>>>(profile1, profile2, innerLoops1, innerLoops2);
+                return Tuple.Create(profile1, profile2, innerLoops1, innerLoops2);
             }
-            catch (Exception ex)
+            catch
             {
-                debugInfo.AppendLine($"Error in CreateSplitProfilesImproved: {ex.Message}");
                 return null;
             }
         }
@@ -192,8 +190,7 @@ namespace SeperatorAddin
                 if (curve.Intersect(splitLine, out IntersectionResultArray results) == SetComparisonResult.Overlap)
                 {
                     XYZ intersectionPoint = results.get_Item(0).XYZPoint;
-                    List<Curve> segments = SplitCurveAtPoint(curve, intersectionPoint);
-                    foreach (var segment in segments)
+                    foreach (var segment in SplitCurveAtPoint(curve, intersectionPoint))
                     {
                         double side = (EvaluateMidpoint(segment) - splitStart).DotProduct(perpendicular);
                         if (side > TOLERANCE) profile1.Add(segment);
@@ -203,8 +200,7 @@ namespace SeperatorAddin
                 }
                 else
                 {
-                    double side = (EvaluateMidpoint(curve) - splitStart).DotProduct(perpendicular);
-                    if (side > 0) profile1.Add(curve);
+                    if ((EvaluateMidpoint(curve) - splitStart).DotProduct(perpendicular) > 0) profile1.Add(curve);
                     else profile2.Add(curve);
                 }
             }
@@ -212,8 +208,7 @@ namespace SeperatorAddin
 
         private Tuple<List<Curve>, List<Curve>> ProcessOpeningForSplit(List<Curve> opening, Line splitLine, XYZ perpendicular, XYZ splitStart, StringBuilder debugInfo)
         {
-            List<Curve> opening1 = null;
-            List<Curve> opening2 = null;
+            List<Curve> opening1 = null, opening2 = null;
             List<XYZ> intersections = new List<XYZ>();
             Dictionary<XYZ, Curve> intersectionCurves = new Dictionary<XYZ, Curve>();
 
@@ -231,8 +226,7 @@ namespace SeperatorAddin
 
             if (intersections.Count == 0)
             {
-                double side = (GetLoopCenter(opening) - splitStart).DotProduct(perpendicular);
-                if (side > 0) opening1 = new List<Curve>(opening);
+                if ((GetLoopCenter(opening) - splitStart).DotProduct(perpendicular) > 0) opening1 = new List<Curve>(opening);
                 else opening2 = new List<Curve>(opening);
             }
             else if (intersections.Count == 2)
@@ -240,8 +234,7 @@ namespace SeperatorAddin
                 opening1 = new List<Curve>();
                 opening2 = new List<Curve>();
                 intersections = intersections.OrderBy(p => splitLine.Project(p).Parameter).ToList();
-                XYZ int1 = intersections[0];
-                XYZ int2 = intersections[1];
+                XYZ int1 = intersections[0], int2 = intersections[1];
 
                 foreach (Curve curve in opening)
                 {
@@ -250,18 +243,16 @@ namespace SeperatorAddin
 
                     if (hasInt1 || hasInt2)
                     {
-                        XYZ intPoint = hasInt1 ? int1 : int2;
-                        foreach (var segment in SplitCurveAtPoint(curve, intPoint))
+                        List<Curve> segments = SplitCurveAtPoint(curve, hasInt1 ? int1 : int2);
+                        foreach (var segment in segments)
                         {
-                            double side = (EvaluateMidpoint(segment) - splitStart).DotProduct(perpendicular);
-                            if (side > TOLERANCE) opening1.Add(segment);
-                            else if (side < -TOLERANCE) opening2.Add(segment);
+                            if ((EvaluateMidpoint(segment) - splitStart).DotProduct(perpendicular) > TOLERANCE) opening1.Add(segment);
+                            else if ((EvaluateMidpoint(segment) - splitStart).DotProduct(perpendicular) < -TOLERANCE) opening2.Add(segment);
                         }
                     }
                     else
                     {
-                        double side = (EvaluateMidpoint(curve) - splitStart).DotProduct(perpendicular);
-                        if (side > 0) opening1.Add(curve);
+                        if ((EvaluateMidpoint(curve) - splitStart).DotProduct(perpendicular) > 0) opening1.Add(curve);
                         else opening2.Add(curve);
                     }
                 }
@@ -272,11 +263,10 @@ namespace SeperatorAddin
                     opening1.Add(connector);
                     opening2.Add(connector.CreateReversed() as Line);
                 }
-
                 opening1 = SortCurvesIntoLoop(opening1, debugInfo);
                 opening2 = SortCurvesIntoLoop(opening2, debugInfo);
             }
-            return new Tuple<List<Curve>, List<Curve>>(opening1, opening2);
+            return Tuple.Create(opening1, opening2);
         }
 
         private List<Curve> SplitCurveAtPoint(Curve curve, XYZ point)
@@ -284,13 +274,11 @@ namespace SeperatorAddin
             List<Curve> segments = new List<Curve>();
             try
             {
-                double param = curve.Project(point).Parameter;
-                if (point.DistanceTo(curve.GetEndPoint(0)) < TOLERANCE || point.DistanceTo(curve.GetEndPoint(1)) < TOLERANCE)
+                if (point.IsAlmostEqualTo(curve.GetEndPoint(0)) || point.IsAlmostEqualTo(curve.GetEndPoint(1)))
                 {
                     segments.Add(curve);
                     return segments;
                 }
-
                 segments.Add(Line.CreateBound(curve.GetEndPoint(0), point));
                 segments.Add(Line.CreateBound(point, curve.GetEndPoint(1)));
             }
@@ -298,39 +286,43 @@ namespace SeperatorAddin
             return segments;
         }
 
-        private Ceiling CreateCeilingWithOpenings(Document doc, List<Curve> outerBoundary, List<List<Curve>> innerBoundaries, CeilingType ceilingType, Level level, double offset)
+        #endregion
+
+        #region Floor Modification
+
+        private Floor CreateFloorWithOpenings(Document doc, List<Curve> outerBoundary, List<List<Curve>> innerBoundaries, FloorType floorType, Level level, double offset, bool isStructural)
         {
             try
             {
-                var allLoops = new List<CurveLoop> { CurveLoop.Create(outerBoundary) };
+                List<CurveLoop> loops = new List<CurveLoop> { CurveLoop.Create(outerBoundary) };
                 foreach (var innerBoundary in innerBoundaries)
                 {
                     if (innerBoundary.Count >= 3)
                     {
-                        allLoops.Add(CurveLoop.Create(innerBoundary));
+                        loops.Add(CurveLoop.Create(innerBoundary));
                     }
                 }
 
-                Ceiling newCeiling = Ceiling.Create(doc, allLoops, ceilingType.Id, level.Id);
-                if (newCeiling != null)
+                Floor newFloor = Floor.Create(doc, loops, floorType.Id, level.Id);
+                if (newFloor != null)
                 {
-                    newCeiling.get_Parameter(BuiltInParameter.CEILING_HEIGHTABOVELEVEL_PARAM).Set(offset);
+                    newFloor.get_Parameter(BuiltInParameter.FLOOR_HEIGHTABOVELEVEL_PARAM).Set(offset);
+                    newFloor.get_Parameter(BuiltInParameter.FLOOR_PARAM_IS_STRUCTURAL)?.Set(isStructural ? 1 : 0);
                 }
-                return newCeiling;
+                return newFloor;
             }
-            catch (Exception ex)
+            catch
             {
-                Debug.WriteLine($"Failed to create ceiling: {ex.Message}");
                 return null;
             }
         }
 
-        private void CopyParameters(Element source, Element target)
+        private void CopyFloorParameters(Floor sourceFloor, Floor targetFloor)
         {
-            foreach (Parameter param in source.Parameters)
+            foreach (Parameter param in sourceFloor.Parameters)
             {
                 if (param.IsReadOnly || param.Id.IntegerValue < 0) continue;
-                Parameter targetParam = target.get_Parameter(param.Definition);
+                Parameter targetParam = targetFloor.get_Parameter(param.Definition);
                 if (targetParam != null && !targetParam.IsReadOnly)
                 {
                     try
@@ -349,16 +341,16 @@ namespace SeperatorAddin
 
         #region Hosted Family Handling
 
-        private List<FamilyInstance> GetHostedFamilies(Document doc, Ceiling ceiling)
+        private List<FamilyInstance> GetHostedFamilies(Document doc, Floor floor)
         {
             return new FilteredElementCollector(doc)
                 .OfClass(typeof(FamilyInstance))
                 .Cast<FamilyInstance>()
-                .Where(fi => fi.Host != null && fi.Host.Id == ceiling.Id)
+                .Where(fi => fi.Host != null && fi.Host.Id == floor.Id)
                 .ToList();
         }
 
-        private void ReassignHostedFamilies(Document doc, Ceiling ceiling1, Ceiling ceiling2, List<FamilyInstance> originalFamilies, Dictionary<FamilyInstance, XYZ> familyLocations, Line splitLine, XYZ splitDirection)
+        private void ReassignHostedFamilies(Document doc, Floor floor1, Floor floor2, List<FamilyInstance> originalFamilies, Dictionary<FamilyInstance, XYZ> familyLocations, Line splitLine, XYZ splitDirection)
         {
             XYZ perpendicular = XYZ.BasisZ.CrossProduct(splitDirection).Normalize();
             XYZ splitStart = splitLine.GetEndPoint(0);
@@ -370,58 +362,74 @@ namespace SeperatorAddin
                 XYZ location = familyLocations[family];
                 double side = (location - splitStart).DotProduct(perpendicular);
 
-                Ceiling targetCeiling = side > 0 ? ceiling1 : ceiling2;
-                FamilyInstance newInstance = PlaceFamilyOnCeiling(doc, family, targetCeiling, location);
+                Floor targetFloor = side > 0 ? floor1 : floor2;
+                FamilyInstance newInstance = PlaceFamilyOnFloor(doc, family, targetFloor, location);
                 if (newInstance != null) familiesToDelete.Add(family.Id);
             }
 
             if (familiesToDelete.Any()) doc.Delete(familiesToDelete);
         }
 
-        private FamilyInstance PlaceFamilyOnCeiling(Document doc, FamilyInstance originalFamily, Ceiling targetCeiling, XYZ location)
+        private FamilyInstance PlaceFamilyOnFloor(Document doc, FamilyInstance originalFamily, Floor targetFloor, XYZ location)
         {
             try
             {
                 FamilySymbol symbol = originalFamily.Symbol;
-                Reference faceRef = GetCeilingBottomFaceReference(targetCeiling, location);
+                Reference faceRef = GetFloorTopFaceReference(targetFloor, location);
                 if (faceRef == null) return null;
 
                 FamilyInstance newInstance = doc.Create.NewFamilyInstance(faceRef, location, originalFamily.HandOrientation, symbol);
+
                 if (newInstance != null)
                 {
-                    CopyParameters(originalFamily, newInstance);
+                    CopyFamilyParameters(originalFamily, newInstance);
                 }
                 return newInstance;
             }
-            catch (Exception ex)
+            catch
             {
-                Debug.WriteLine($"Failed to place family on ceiling: {ex.Message}");
                 return null;
             }
         }
 
-        private Reference GetCeilingBottomFaceReference(Ceiling ceiling, XYZ location)
+        private Reference GetFloorTopFaceReference(Floor floor, XYZ location)
         {
             Options options = new Options { ComputeReferences = true, DetailLevel = ViewDetailLevel.Fine };
-            GeometryElement geomElem = ceiling.get_Geometry(options);
-
+            GeometryElement geomElem = floor.get_Geometry(options);
             foreach (GeometryObject geomObj in geomElem)
             {
                 if (geomObj is Solid solid)
                 {
                     foreach (Face face in solid.Faces)
                     {
-                        if (face is PlanarFace planarFace && planarFace.FaceNormal.DotProduct(XYZ.BasisZ) < -0.9)
+                        if (face is PlanarFace planarFace && planarFace.FaceNormal.DotProduct(XYZ.BasisZ) > 0.9)
                         {
-                            if (face.Project(location) != null && face.Project(location).Distance < 10.0)
-                            {
-                                return face.Reference;
-                            }
+                            if (face.Project(location) != null) return face.Reference;
                         }
                     }
                 }
             }
             return null;
+        }
+
+        private void CopyFamilyParameters(FamilyInstance source, FamilyInstance target)
+        {
+            foreach (Parameter param in source.Parameters)
+            {
+                if (param.IsReadOnly || !param.HasValue) continue;
+                Parameter targetParam = target.get_Parameter(param.Definition);
+                if (targetParam != null && !targetParam.IsReadOnly)
+                {
+                    try
+                    {
+                        if (param.StorageType == StorageType.Double) targetParam.Set(param.AsDouble());
+                        else if (param.StorageType == StorageType.Integer) targetParam.Set(param.AsInteger());
+                        else if (param.StorageType == StorageType.String) targetParam.Set(param.AsString());
+                        else if (param.StorageType == StorageType.ElementId) targetParam.Set(param.AsElementId());
+                    }
+                    catch { }
+                }
+            }
         }
 
         #endregion
@@ -441,10 +449,8 @@ namespace SeperatorAddin
         private List<Curve> SortCurvesIntoLoop(List<Curve> curves, StringBuilder debugInfo)
         {
             if (curves.Count < 2) return curves;
-
             List<Curve> sorted = new List<Curve> { curves[0] };
             curves.RemoveAt(0);
-
             while (curves.Any())
             {
                 XYZ currentEnd = sorted.Last().GetEndPoint(1);
@@ -473,69 +479,75 @@ namespace SeperatorAddin
 
         private XYZ EvaluateMidpoint(Curve curve)
         {
-            try
-            {
-                return curve.Evaluate(0.5, true);
-            }
-            catch
-            {
-                return (curve.GetEndPoint(0) + curve.GetEndPoint(1)) / 2.0;
-            }
+            try { return curve.Evaluate(0.5, true); }
+            catch { return (curve.GetEndPoint(0) + curve.GetEndPoint(1)) / 2.0; }
         }
 
         private XYZ GetLoopCenter(List<Curve> loop)
         {
             XYZ center = XYZ.Zero;
+            if (loop == null || !loop.Any()) return center;
             foreach (Curve curve in loop) center += EvaluateMidpoint(curve);
             return center / loop.Count;
         }
 
-        private Tuple<List<Curve>, List<List<Curve>>> GetCeilingBoundaryLoops(Ceiling ceiling)
+        private Tuple<List<Curve>, List<List<Curve>>> GetFloorBoundaryLoops(Floor floor)
         {
             List<Curve> outerBoundary = new List<Curve>();
             List<List<Curve>> innerBoundaries = new List<List<Curve>>();
             Options options = new Options { ComputeReferences = true, DetailLevel = ViewDetailLevel.Fine };
-            GeometryElement geomElem = ceiling.get_Geometry(options);
+            GeometryElement geomElem = floor.get_Geometry(options);
 
             foreach (GeometryObject geomObj in geomElem)
             {
                 if (geomObj is Solid solid && solid.Volume > 0)
                 {
+                    Face topFace = null;
+                    double maxZ = double.MinValue;
                     foreach (Face face in solid.Faces)
                     {
-                        if (face is PlanarFace planarFace && planarFace.FaceNormal.DotProduct(XYZ.BasisZ) < -0.9) // Bottom face
+                        if (face is PlanarFace planarFace && planarFace.FaceNormal.DotProduct(XYZ.BasisZ) > 0.9) // Top face
                         {
-                            EdgeArray largestLoop = null;
-                            double maxArea = 0;
-                            List<EdgeArray> innerLoops = new List<EdgeArray>();
-
-                            foreach (EdgeArray edgeArray in face.EdgeLoops)
+                            if (planarFace.Origin.Z > maxZ)
                             {
-                                double area = GetLoopArea(edgeArray);
-                                if (area > maxArea)
-                                {
-                                    if (largestLoop != null) innerLoops.Add(largestLoop);
-                                    maxArea = area;
-                                    largestLoop = edgeArray;
-                                }
-                                else
-                                {
-                                    innerLoops.Add(edgeArray);
-                                }
+                                maxZ = planarFace.Origin.Z;
+                                topFace = planarFace;
                             }
-
-                            if (largestLoop != null)
-                            {
-                                foreach (Edge edge in largestLoop) outerBoundary.Add(edge.AsCurve());
-                            }
-                            foreach (EdgeArray innerLoop in innerLoops)
-                            {
-                                List<Curve> innerCurves = new List<Curve>();
-                                foreach (Edge edge in innerLoop) innerCurves.Add(edge.AsCurve());
-                                if (innerCurves.Any()) innerBoundaries.Add(innerCurves);
-                            }
-                            return new Tuple<List<Curve>, List<List<Curve>>>(outerBoundary, innerBoundaries);
                         }
+                    }
+
+                    if (topFace != null)
+                    {
+                        EdgeArray largestLoop = null;
+                        double maxArea = 0;
+                        List<EdgeArray> innerLoops = new List<EdgeArray>();
+
+                        foreach (EdgeArray edgeArray in topFace.EdgeLoops)
+                        {
+                            double area = GetLoopArea(edgeArray);
+                            if (area > maxArea)
+                            {
+                                if (largestLoop != null) innerLoops.Add(largestLoop);
+                                maxArea = area;
+                                largestLoop = edgeArray;
+                            }
+                            else
+                            {
+                                innerLoops.Add(edgeArray);
+                            }
+                        }
+
+                        if (largestLoop != null)
+                        {
+                            foreach (Edge edge in largestLoop) outerBoundary.Add(edge.AsCurve());
+                        }
+                        foreach (EdgeArray innerLoop in innerLoops)
+                        {
+                            List<Curve> innerCurves = new List<Curve>();
+                            foreach (Edge edge in innerLoop) innerCurves.Add(edge.AsCurve());
+                            if (innerCurves.Any()) innerBoundaries.Add(innerCurves);
+                        }
+                        return new Tuple<List<Curve>, List<List<Curve>>>(outerBoundary, innerBoundaries);
                     }
                 }
             }
@@ -555,18 +567,19 @@ namespace SeperatorAddin
             }
             return Math.Abs(area) / 2.0;
         }
+
         #endregion
     }
-    public class CeilingSelectionFilter : ISelectionFilter
-    {
-        public bool AllowElement(Element elem)
-        {
-            return elem is Ceiling;
-        }
 
-        public bool AllowReference(Reference reference, XYZ position)
-        {
-            return false;
-        }
+    public class FloorSelectionFilter : ISelectionFilter
+    {
+        public bool AllowElement(Element elem) => elem is Floor;
+        public bool AllowReference(Reference reference, XYZ position) => false;
+    }
+
+    public class ModelCurveSelectionFilter : ISelectionFilter
+    {
+        public bool AllowElement(Element elem) => elem is ModelCurve;
+        public bool AllowReference(Reference reference, XYZ position) => false;
     }
 }

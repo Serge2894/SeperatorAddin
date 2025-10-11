@@ -303,21 +303,5 @@ namespace SeperatorAddin
 
             return newRoofType;
         }
-
-        internal static PushButtonData GetButtonData()
-        {
-            string buttonInternalName = "cmdRoofSeperator";
-            string buttonTitle = "Separate\nRoofs";
-
-            ButtonDataClass myButtonData = new ButtonDataClass(
-                buttonInternalName,
-                buttonTitle,
-                MethodBase.GetCurrentMethod().DeclaringType?.FullName,
-                Properties.Resources.Red_32,
-                Properties.Resources.Red_16,
-                "Separates a multi-layer flat roof into individual roofs for each layer.");
-
-            return myButtonData.Data;
-        }
     }
 }

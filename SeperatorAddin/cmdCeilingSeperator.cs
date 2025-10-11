@@ -235,21 +235,5 @@ namespace SeperatorAddin
 
             return newCeilingType;
         }
-
-        internal static PushButtonData GetButtonData()
-        {
-            string buttonInternalName = "cmdCeilingSeperator";
-            string buttonTitle = "Separate\nCeilings";
-
-            ButtonDataClass myButtonData = new ButtonDataClass(
-                buttonInternalName,
-                buttonTitle,
-                MethodBase.GetCurrentMethod().DeclaringType?.FullName,
-                Properties.Resources.Green_32,
-                Properties.Resources.Green_16,
-                "Separates a multi-layer ceiling into individual ceilings for each layer.");
-
-            return myButtonData.Data;
-        }
     }
 }

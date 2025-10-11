@@ -281,22 +281,5 @@ namespace SeperatorAddin
 
             return newFloorType;
         }
-
-
-        internal static PushButtonData GetButtonData()
-        {
-            string buttonInternalName = "cmdFloorSeperator";
-            string buttonTitle = "Separate\nFloors";
-
-            ButtonDataClass myButtonData = new ButtonDataClass(
-                buttonInternalName,
-                buttonTitle,
-                MethodBase.GetCurrentMethod().DeclaringType?.FullName,
-                Properties.Resources.Blue_32,
-                Properties.Resources.Blue_16,
-                "Separates a multi-layer floor into individual floors for each layer.");
-
-            return myButtonData.Data;
-        }
     }
 }

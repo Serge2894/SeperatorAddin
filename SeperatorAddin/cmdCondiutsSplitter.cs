@@ -37,87 +37,21 @@ namespace SeperatorAddin
                 // Get split point
                 XYZ splitPoint = uidoc.Selection.PickPoint("Pick a point on the conduit to split");
 
-                // Project the point onto the conduit
-                LocationCurve locCurve = originalConduit.Location as LocationCurve;
-                if (locCurve == null)
-                {
-                    TaskDialog.Show("Error", "Could not get conduit location curve.");
-                    return Result.Failed;
-                }
-
-                Line conduitLine = locCurve.Curve as Line;
-                if (conduitLine == null)
-                {
-                    TaskDialog.Show("Error", "This tool only works with straight conduits.");
-                    return Result.Failed;
-                }
-
-                // Project split point onto conduit line
-                IntersectionResult projection = conduitLine.Project(splitPoint);
-                if (projection == null)
-                {
-                    TaskDialog.Show("Error", "Could not project point onto conduit.");
-                    return Result.Failed;
-                }
-
-                XYZ projectedPoint = projection.XYZPoint;
-
-                // Check if split point is valid (not too close to ends)
-                double minDistance = 0.5; // 6 inches minimum
-                if (projectedPoint.DistanceTo(conduitLine.GetEndPoint(0)) < minDistance ||
-                    projectedPoint.DistanceTo(conduitLine.GetEndPoint(1)) < minDistance)
-                {
-                    TaskDialog.Show("Error", "Split point is too close to conduit ends.");
-                    return Result.Failed;
-                }
-
                 using (Transaction trans = new Transaction(doc, "Split Conduit"))
                 {
                     trans.Start();
+                    bool success = SplitConduit(doc, originalConduit, splitPoint);
 
-                    try
+                    if (success)
                     {
-                        // Store original conduit parameters
-                        Dictionary<string, object> conduitParameters = StoreConduitParameters(originalConduit);
-                        ConduitType conduitType = doc.GetElement(originalConduit.GetTypeId()) as ConduitType;
-                        ElementId levelId = originalConduit.ReferenceLevel.Id;
-
-                        // Get start and end points
-                        XYZ startPoint = conduitLine.GetEndPoint(0);
-                        XYZ endPoint = conduitLine.GetEndPoint(1);
-
-                        // Create two new lines for the new segments
-                        Line line1 = Line.CreateBound(startPoint, projectedPoint);
-                        Line line2 = Line.CreateBound(projectedPoint, endPoint);
-
-                        // Create the new conduit segments
-                        Conduit newConduit1 = Conduit.Create(doc, conduitType.Id, line1.GetEndPoint(0), line1.GetEndPoint(1), levelId);
-                        Conduit newConduit2 = Conduit.Create(doc, conduitType.Id, line2.GetEndPoint(0), line2.GetEndPoint(1), levelId);
-
-
-                        if (newConduit1 == null || newConduit2 == null)
-                        {
-                            trans.RollBack();
-                            TaskDialog.Show("Error", "Failed to create new conduit segments.");
-                            return Result.Failed;
-                        }
-
-                        // Restore parameters to both new conduits
-                        RestoreConduitParameters(newConduit1, conduitParameters);
-                        RestoreConduitParameters(newConduit2, conduitParameters);
-
-                        // Delete the original conduit
-                        doc.Delete(originalConduit.Id);
-
                         trans.Commit();
-
                         TaskDialog.Show("Success", "Conduit split successfully.");
                         return Result.Succeeded;
                     }
-                    catch (Exception ex)
+                    else
                     {
                         trans.RollBack();
-                        TaskDialog.Show("Error", $"Failed to split conduit: {ex.Message}");
+                        message = "Failed to split conduit. The split point may be too close to an end.";
                         return Result.Failed;
                     }
                 }
@@ -133,21 +67,75 @@ namespace SeperatorAddin
             }
         }
 
+        public bool SplitConduit(Document doc, Conduit originalConduit, XYZ splitPoint)
+        {
+            if (originalConduit == null) return false;
+            LocationCurve locCurve = originalConduit.Location as LocationCurve;
+            if (locCurve == null || !(locCurve.Curve is Line conduitLine)) return false;
+
+            IntersectionResult projection = conduitLine.Project(splitPoint);
+            if (projection == null) return false;
+            XYZ projectedPoint = projection.XYZPoint;
+
+            // Check if split point is valid (not too close to ends)
+            double minDistance = 0.5; // 6 inches minimum
+            if (projectedPoint.DistanceTo(conduitLine.GetEndPoint(0)) < minDistance ||
+                projectedPoint.DistanceTo(conduitLine.GetEndPoint(1)) < minDistance)
+            {
+                return false;
+            }
+
+            try
+            {
+                // Store original conduit parameters
+                Dictionary<string, object> conduitParameters = StoreConduitParameters(originalConduit);
+                ConduitType conduitType = doc.GetElement(originalConduit.GetTypeId()) as ConduitType;
+                ElementId levelId = originalConduit.ReferenceLevel.Id;
+
+                // Get start and end points
+                XYZ startPoint = conduitLine.GetEndPoint(0);
+                XYZ endPoint = conduitLine.GetEndPoint(1);
+
+                // Create two new lines for the new segments
+                Line line1 = Line.CreateBound(startPoint, projectedPoint);
+                Line line2 = Line.CreateBound(projectedPoint, endPoint);
+
+                // Create the new conduit segments
+                Conduit newConduit1 = Conduit.Create(doc, conduitType.Id, line1.GetEndPoint(0), line1.GetEndPoint(1), levelId);
+                Conduit newConduit2 = Conduit.Create(doc, conduitType.Id, line2.GetEndPoint(0), line2.GetEndPoint(1), levelId);
+
+
+                if (newConduit1 == null || newConduit2 == null)
+                {
+                    return false;
+                }
+
+                // Restore parameters to both new conduits
+                RestoreConduitParameters(newConduit1, conduitParameters);
+                RestoreConduitParameters(newConduit2, conduitParameters);
+
+                // Delete the original conduit
+                doc.Delete(originalConduit.Id);
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+
         #region Conduit Parameter Handling
 
         private Dictionary<string, object> StoreConduitParameters(Conduit conduit)
         {
             Dictionary<string, object> parameters = new Dictionary<string, object>();
 
-            // Store important conduit parameters
-            Parameter diameter = conduit.get_Parameter(BuiltInParameter.RBS_CONDUIT_DIAMETER_PARAM);
-            if (diameter != null)
-                parameters["Diameter"] = diameter.AsDouble();
-
             // Store custom parameters
             foreach (Parameter param in conduit.Parameters)
             {
-                if (param == null || param.IsReadOnly || !param.HasValue) continue;
+                if (param == null || !param.HasValue) continue;
 
                 string paramName = param.Definition.Name;
                 if (parameters.ContainsKey(paramName)) continue;
@@ -207,26 +195,6 @@ namespace SeperatorAddin
                 }
                 catch { }
             }
-        }
-
-        #endregion
-
-        #region Utility Methods
-
-        internal static PushButtonData GetButtonData()
-        {
-            string buttonInternalName = "btnConduitSplitter";
-            string buttonTitle = "Split Conduit";
-
-            Common.ButtonDataClass myButtonData = new Common.ButtonDataClass(
-                buttonInternalName,
-                buttonTitle,
-                MethodBase.GetCurrentMethod().DeclaringType?.FullName,
-                Properties.Resources.Blue_32,
-                Properties.Resources.Blue_16,
-                "Splits a conduit at a selected point and copies parameters to both segments");
-
-            return myButtonData.Data;
         }
 
         #endregion

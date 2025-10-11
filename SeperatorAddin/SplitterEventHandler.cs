@@ -1,35 +1,41 @@
 ﻿using Autodesk.Revit.DB;
+using Autodesk.Revit.DB.Electrical;
+using Autodesk.Revit.DB.Mechanical;
+using Autodesk.Revit.DB.Plumbing;
 using Autodesk.Revit.UI;
-using Autodesk.Revit.UI.Selection;
-using SeperatorAddin.Common;
+using SeperatorAddin.Forms;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 namespace SeperatorAddin
 {
-    public enum SplitterCommandType
-    {
-        Floor,
-        Wall,
-        Roof,
-        Pipe,
-        Framing,
-        Duct,
-        Conduit,
-        Ceiling,
-        CableTray
-    }
-
     public class SplitterEventHandler : IExternalEventHandler
     {
-        private List<SplitterCommandType> _commandTypes = new List<SplitterCommandType>();
         private List<Reference> _modelLineRefs = new List<Reference>();
+        private List<Reference> _floorRefs = new List<Reference>();
+        private List<Reference> _wallRefs = new List<Reference>();
+        private List<Reference> _roofRefs = new List<Reference>();
+        private List<Reference> _pipeRefs = new List<Reference>();
+        private List<Reference> _framingRefs = new List<Reference>();
+        private List<Reference> _ductRefs = new List<Reference>();
+        private List<Reference> _conduitRefs = new List<Reference>();
+        private List<Reference> _ceilingRefs = new List<Reference>();
+        private List<Reference> _cableTrayRefs = new List<Reference>();
 
-        public void SetData(List<SplitterCommandType> commandTypes, List<Reference> modelLineRefs)
+        public void SetData(List<Reference> modelLineRefs, List<Reference> floorRefs, List<Reference> wallRefs, List<Reference> roofRefs, List<Reference> pipeRefs, List<Reference> framingRefs, List<Reference> ductRefs, List<Reference> conduitRefs, List<Reference> ceilingRefs, List<Reference> cableTrayRefs)
         {
-            _commandTypes = commandTypes;
             _modelLineRefs = modelLineRefs;
+            _floorRefs = floorRefs;
+            _wallRefs = wallRefs;
+            _roofRefs = roofRefs;
+            _pipeRefs = pipeRefs;
+            _framingRefs = framingRefs;
+            _ductRefs = ductRefs;
+            _conduitRefs = conduitRefs;
+            _ceilingRefs = ceilingRefs;
+            _cableTrayRefs = cableTrayRefs;
         }
 
         public void Execute(UIApplication app)
@@ -39,115 +45,69 @@ namespace SeperatorAddin
 
             if (_modelLineRefs == null || !_modelLineRefs.Any()) return;
 
-            using (Transaction t = new Transaction(doc, "Split Elements"))
+            int totalElementsProcessed = 0;
+
+            using (Transaction t = new Transaction(doc, "Split Elements by Line"))
             {
                 t.Start();
-                foreach (var commandType in _commandTypes)
+
+                var floorSplitter = new cmdFloorSplitter();
+                var wallSplitter = new cmdWallSplitter();
+                var roofSplitter = new cmdRoofSplitter();
+                var ductSplitter = new cmdDuctSplitter();
+                var pipeSplitter = new cmdPipeSplitter();
+                var framingSplitter = new cmdFramingSplitter();
+                var conduitSplitter = new cmdConduitsSplitter();
+                var cableTraySplitter = new cmdCableTraySplitter();
+                var ceilingSplitter = new cmdCeilingSplitter();
+
+                foreach (var lineRef in _modelLineRefs)
                 {
-                    try
-                    {
-                        // Get the appropriate filter and prompt for the current category
-                        (ISelectionFilter filter, string prompt) = GetSelectionDetails(commandType);
+                    var modelCurve = doc.GetElement(lineRef) as ModelCurve;
+                    if (modelCurve == null) continue;
 
-                        // Prompt the user to select elements of that category
-                        var elementsToSplitRefs = uidoc.Selection.PickObjects(ObjectType.Element, filter, prompt);
-                        if (elementsToSplitRefs == null || !elementsToSplitRefs.Any()) continue;
+                    XYZ splitPoint = modelCurve.GeometryCurve.Evaluate(0.5, true);
 
-                        foreach (var elemRef in elementsToSplitRefs)
-                        {
-                            var element = doc.GetElement(elemRef);
-                            if (element == null) continue;
-
-                            // We'll just use the first model line for splitting for simplicity
-                            var modelLineRef = _modelLineRefs.First();
-                            var modelLine = doc.GetElement(modelLineRef) as ModelCurve;
-                            if (modelLine == null) continue;
-
-                            // Execute the split using the appropriate command
-                            ExecuteCommand(commandType, app, element, modelLine);
-                        }
-                    }
-                    catch (Autodesk.Revit.Exceptions.OperationCanceledException)
-                    {
-                        // User cancelled selection for a category, so we continue to the next
-                        continue;
-                    }
-                    catch (Exception ex)
-                    {
-                        TaskDialog.Show("Error", $"An error occurred while splitting {commandType}: {ex.Message}");
-                    }
+                    totalElementsProcessed += ProcessElements(doc, _floorRefs, e => floorSplitter.SplitFloor(doc, e as Floor, modelCurve));
+                    totalElementsProcessed += ProcessElements(doc, _wallRefs, e => wallSplitter.SplitWall(doc, e as Wall, modelCurve));
+                    totalElementsProcessed += ProcessElements(doc, _roofRefs, e => roofSplitter.SplitRoof(doc, e as RoofBase, modelCurve));
+                    totalElementsProcessed += ProcessElements(doc, _ductRefs, e => ductSplitter.SplitDuct(doc, e as Duct, splitPoint));
+                    totalElementsProcessed += ProcessElements(doc, _pipeRefs, e => pipeSplitter.SplitPipe(doc, e as Pipe, splitPoint));
+                    totalElementsProcessed += ProcessElements(doc, _framingRefs, e => framingSplitter.SplitFraming(doc, e as FamilyInstance, splitPoint));
+                    totalElementsProcessed += ProcessElements(doc, _conduitRefs, e => conduitSplitter.SplitConduit(doc, e as Conduit, splitPoint));
+                    totalElementsProcessed += ProcessElements(doc, _cableTrayRefs, e => cableTraySplitter.SplitCableTray(doc, e as CableTray, splitPoint));
+                    totalElementsProcessed += ProcessElements(doc, _ceilingRefs, e => ceilingSplitter.SplitCeiling(doc, e as Ceiling, modelCurve));
                 }
+
                 t.Commit();
             }
-        }
 
-        private (ISelectionFilter, string) GetSelectionDetails(SplitterCommandType commandType)
-        {
-            switch (commandType)
+            if (totalElementsProcessed > 0)
             {
-                case SplitterCommandType.Floor:
-                    return (new FloorSelectionFilter(), "Select Floors to Split");
-                case SplitterCommandType.Wall:
-                    return (new Utils.WallSelectionFilter(), "Select Walls to Split");
-                case SplitterCommandType.Roof:
-                    return (new RoofSelectionFilter(), "Select Roofs to Split");
-                case SplitterCommandType.Pipe:
-                    return (new Utils.PipeSelectionFilter(), "Select Pipes to Split");
-                case SplitterCommandType.Framing:
-                    return (new cmdFramingSplitter.FramingSelectionFilter(), "Select Framing to Split");
-                case SplitterCommandType.Duct:
-                    return (new Utils.DuctSelectionFilter(), "Select Ducts to Split");
-                case SplitterCommandType.Conduit:
-                    return (new ConduitSelectionFilter(), "Select Conduits to Split");
-                case SplitterCommandType.Ceiling:
-                    return (new CeilingSelectionFilter(), "Select Ceilings to Split");
-                case SplitterCommandType.CableTray:
-                    return (new CableTraySelectionFilter(), "Select Cable Trays to Split");
-                default:
-                    throw new ArgumentOutOfRangeException();
+                new frmInfoDialog("Element(s) were split successfully.", "Split Results").ShowDialog();
             }
         }
 
-        private void ExecuteCommand(SplitterCommandType commandType, UIApplication app, Element element, ModelCurve modelLine)
+        private int ProcessElements(Document doc, List<Reference> references, Func<Element, bool> splitAction)
         {
-            // In a real-world scenario, you would refactor the core logic of each command
-            // to be callable from here. For this example, we will just call the command's Execute method.
-            string message = "";
-            IExternalCommand command = null;
-            switch (commandType)
+            if (references == null || !references.Any()) return 0;
+
+            int successCount = 0;
+            var elementIds = references.Select(r => r.ElementId).ToList();
+
+            foreach (var id in elementIds)
             {
-                case SplitterCommandType.Floor:
-                    command = new cmdSplitTool();
-                    break;
-                case SplitterCommandType.Wall:
-                    command = new cmdWallSplitter();
-                    break;
-                case SplitterCommandType.Roof:
-                    command = new cmdRoofSplitter();
-                    break;
-                case SplitterCommandType.Pipe:
-                    command = new cmdPipeSplitter();
-                    break;
-                case SplitterCommandType.Framing:
-                    command = new cmdFramingSplitter();
-                    break;
-                case SplitterCommandType.Duct:
-                    command = new cmdDuctSplitter();
-                    break;
-                case SplitterCommandType.Conduit:
-                    command = new cmdConduitsSplitter();
-                    break;
-                case SplitterCommandType.Ceiling:
-                    command = new cmdCeilingSplitter();
-                    break;
-                case SplitterCommandType.CableTray:
-                    command = new cmdCableTraySplitter();
-                    break;
+                Element element = doc.GetElement(id);
+                if (element != null)
+                {
+                    if (splitAction(element))
+                    {
+                        successCount++;
+                    }
+                }
             }
-            command?.Execute(new ExternalCommandData(app.Application, new View(app.ActiveUIDocument.Document), app.ActiveUIDocument.ActiveView, null), ref message, new ElementSet());
-
+            return successCount;
         }
-
 
         public string GetName() => "Splitter Event Handler";
     }

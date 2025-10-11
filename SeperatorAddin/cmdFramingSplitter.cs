@@ -38,99 +38,16 @@ namespace SeperatorAddin
                 using (Transaction trans = new Transaction(doc, "Split Structural Framing"))
                 {
                     trans.Start();
-
-                    try
+                    bool success = SplitFraming(doc, framingElement, splitPoint);
+                    if (success)
                     {
-                        LocationCurve framingLocationCurve = framingElement.Location as LocationCurve;
-                        if (framingLocationCurve == null)
-                        {
-                            message = "Could not get the location curve of the framing element.";
-                            return Result.Failed;
-                        }
-
-                        Line framingLine = framingLocationCurve.Curve as Line;
-                        if (framingLine == null)
-                        {
-                            TaskDialog.Show("Error", "This tool only works with straight framing elements.");
-                            return Result.Failed;
-                        }
-
-                        // Project the picked point onto the framing line to find the split point
-                        IntersectionResult projection = framingLine.Project(splitPoint);
-                        if (projection == null)
-                        {
-                            message = "The picked point could not be projected onto the framing element's location line.";
-                            return Result.Failed;
-                        }
-                        XYZ intersectionPoint = projection.XYZPoint;
-
-                        // Check if split point is too close to the ends
-                        double minDistance = 0.01; // A small tolerance
-                        if (intersectionPoint.IsAlmostEqualTo(framingLine.GetEndPoint(0), minDistance) ||
-                            intersectionPoint.IsAlmostEqualTo(framingLine.GetEndPoint(1), minDistance))
-                        {
-                            message = "The split point is too close to the end of the framing element.";
-                            trans.RollBack();
-                            return Result.Cancelled;
-                        }
-
-                        // Store original parameters
-                        Dictionary<string, Parameter> originalParams = GetElementParameters(framingElement);
-                        double startExtension = framingElement.get_Parameter(BuiltInParameter.START_EXTENSION).AsDouble();
-                        double endExtension = framingElement.get_Parameter(BuiltInParameter.END_EXTENSION).AsDouble();
-
-                        // Get structural type and level
-                        StructuralType structuralType = framingElement.StructuralType;
-                        Level level = doc.GetElement(framingElement.LevelId) as Level;
-                        if (level == null)
-                        {
-                            if (framingElement.Host != null)
-                            {
-                                level = doc.GetElement(framingElement.Host.LevelId) as Level;
-                            }
-                            if (level == null)
-                            {
-                                level = doc.ActiveView.GenLevel;
-                            }
-                        }
-
-                        // Create two new framing segments
-                        Line segment1 = Line.CreateBound(framingLine.GetEndPoint(0), intersectionPoint);
-                        Line segment2 = Line.CreateBound(intersectionPoint, framingLine.GetEndPoint(1));
-
-                        FamilyInstance newFraming1 = doc.Create.NewFamilyInstance(segment1, framingElement.Symbol, level, structuralType);
-                        FamilyInstance newFraming2 = doc.Create.NewFamilyInstance(segment2, framingElement.Symbol, level, structuralType);
-
-                        // Copy all parameters first
-                        CopyParameters(originalParams, newFraming1);
-                        CopyParameters(originalParams, newFraming2);
-
-                        // Preserve original start properties for the first segment
-                        newFraming1.get_Parameter(BuiltInParameter.START_EXTENSION).Set(startExtension);
-
-                        // Set the end of the first segment (at the split) to have no extension
-                        newFraming1.get_Parameter(BuiltInParameter.END_EXTENSION).Set(0);
-
-                        // Set the start of the second segment (at the split) to have no extension
-                        newFraming2.get_Parameter(BuiltInParameter.START_EXTENSION).Set(0);
-
-                        // Preserve original end properties for the second segment
-                        newFraming2.get_Parameter(BuiltInParameter.END_EXTENSION).Set(endExtension);
-
-                        // Safely set JOIN cutback parameters to zero to remove the gap
-                        SetJoinCutbackParameter(newFraming1, "END_JOIN_CUTBACK", 0);
-                        SetJoinCutbackParameter(newFraming2, "START_JOIN_CUTBACK", 0);
-
-                        // Delete the original element
-                        doc.Delete(framingElement.Id);
-
                         trans.Commit();
                         return Result.Succeeded;
                     }
-                    catch (Exception ex)
+                    else
                     {
                         trans.RollBack();
-                        message = "Failed to split the framing element: " + ex.Message;
+                        message = "Failed to split the framing element. The split point may be too close to an end.";
                         return Result.Failed;
                     }
                 }
@@ -146,6 +63,75 @@ namespace SeperatorAddin
             }
         }
 
+        public bool SplitFraming(Document doc, FamilyInstance framingElement, XYZ splitPoint)
+        {
+            if (framingElement == null) return false;
+            LocationCurve framingLocationCurve = framingElement.Location as LocationCurve;
+            if (framingLocationCurve == null || !(framingLocationCurve.Curve is Line framingLine)) return false;
+
+            IntersectionResult projection = framingLine.Project(splitPoint);
+            if (projection == null) return false;
+            XYZ intersectionPoint = projection.XYZPoint;
+
+            // Check if split point is too close to the ends
+            double minDistance = 0.01; // A small tolerance
+            if (intersectionPoint.IsAlmostEqualTo(framingLine.GetEndPoint(0), minDistance) ||
+                intersectionPoint.IsAlmostEqualTo(framingLine.GetEndPoint(1), minDistance))
+            {
+                return false;
+            }
+
+            try
+            {
+                // Store original parameters
+                Dictionary<string, Parameter> originalParams = GetElementParameters(framingElement);
+                double startExtension = framingElement.get_Parameter(BuiltInParameter.START_EXTENSION).AsDouble();
+                double endExtension = framingElement.get_Parameter(BuiltInParameter.END_EXTENSION).AsDouble();
+
+                // Get structural type and level
+                StructuralType structuralType = framingElement.StructuralType;
+                Level level = doc.GetElement(framingElement.LevelId) as Level;
+                if (level == null)
+                {
+                    level = doc.ActiveView.GenLevel ?? new FilteredElementCollector(doc).OfClass(typeof(Level)).FirstElement() as Level;
+                }
+                if (level == null) return false;
+
+
+                // Create two new framing segments
+                Line segment1 = Line.CreateBound(framingLine.GetEndPoint(0), intersectionPoint);
+                Line segment2 = Line.CreateBound(intersectionPoint, framingLine.GetEndPoint(1));
+
+                FamilyInstance newFraming1 = doc.Create.NewFamilyInstance(segment1, framingElement.Symbol, level, structuralType);
+                FamilyInstance newFraming2 = doc.Create.NewFamilyInstance(segment2, framingElement.Symbol, level, structuralType);
+
+                if (newFraming1 == null || newFraming2 == null) return false;
+
+                // Copy all parameters first
+                CopyParameters(originalParams, newFraming1);
+                CopyParameters(originalParams, newFraming2);
+
+                // Preserve original start/end properties
+                newFraming1.get_Parameter(BuiltInParameter.START_EXTENSION).Set(startExtension);
+                newFraming1.get_Parameter(BuiltInParameter.END_EXTENSION).Set(0);
+                newFraming2.get_Parameter(BuiltInParameter.START_EXTENSION).Set(0);
+                newFraming2.get_Parameter(BuiltInParameter.END_EXTENSION).Set(endExtension);
+
+                // Safely set JOIN cutback parameters to zero to remove the gap
+                SetJoinCutbackParameter(newFraming1, "END_JOIN_CUTBACK", 0);
+                SetJoinCutbackParameter(newFraming2, "START_JOIN_CUTBACK", 0);
+
+                // Delete the original element
+                doc.Delete(framingElement.Id);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        #region Helper Methods
         /// <summary>
         /// Safely sets a BuiltInParameter value by its string name, avoiding compile-time errors for different API versions.
         /// </summary>
@@ -169,7 +155,6 @@ namespace SeperatorAddin
             }
         }
 
-
         private Dictionary<string, Parameter> GetElementParameters(Element element)
         {
             var paramDict = new Dictionary<string, Parameter>();
@@ -187,9 +172,8 @@ namespace SeperatorAddin
         {
             foreach (Parameter targetParam in target.Parameters)
             {
-                if (!targetParam.IsReadOnly && sourceParams.ContainsKey(targetParam.Definition.Name))
+                if (!targetParam.IsReadOnly && sourceParams.TryGetValue(targetParam.Definition.Name, out Parameter sourceParam))
                 {
-                    Parameter sourceParam = sourceParams[targetParam.Definition.Name];
                     if (sourceParam.StorageType == targetParam.StorageType)
                     {
                         try
@@ -219,22 +203,6 @@ namespace SeperatorAddin
             }
         }
 
-        internal static PushButtonData GetButtonData()
-        {
-            string buttonInternalName = "btnSplitFraming";
-            string buttonTitle = "Split Framing";
-
-            ButtonDataClass myButtonData = new ButtonDataClass(
-                buttonInternalName,
-                buttonTitle,
-                MethodBase.GetCurrentMethod().DeclaringType?.FullName,
-                Properties.Resources.Blue_32,
-                Properties.Resources.Blue_16,
-                "Splits a structural framing element at a specified point.");
-
-            return myButtonData.Data;
-        }
-
         public class FramingSelectionFilter : ISelectionFilter
         {
             public bool AllowElement(Element elem)
@@ -247,5 +215,6 @@ namespace SeperatorAddin
                 return false;
             }
         }
+        #endregion
     }
 }

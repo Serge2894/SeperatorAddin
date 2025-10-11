@@ -1100,22 +1100,6 @@ namespace SeperatorAddin
             // Could also write to a file or show in UI
         }
 
-        internal static PushButtonData GetButtonData()
-        {
-            string buttonInternalName = "btnCommand1";
-            string buttonTitle = "Split Walls";
-
-            Common.ButtonDataClass myButtonData = new Common.ButtonDataClass(
-                buttonInternalName,
-                buttonTitle,
-                MethodBase.GetCurrentMethod().DeclaringType?.FullName,
-                Properties.Resources.Blue_32,
-                Properties.Resources.Blue_16,
-                "Splits multi-layer walls into separate walls for each layer with intelligent joining for different wall types");
-
-            return myButtonData.Data;
-        }
-
         #endregion
     }
 }
